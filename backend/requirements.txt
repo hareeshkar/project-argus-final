@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+pydantic
+pandas
+numpy
+scipy
+statsmodels
+httpx
+websockets
+openai
