@@ -24,11 +24,18 @@ def _load_dotenv_local() -> None:
 _load_dotenv_local()
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True)
 class Settings:
     app_name: str = "Project Argus Final API"
     version: str = "2.0.0"
-    demo_mode: bool = os.getenv("ARGUS_DEMO_MODE", "true").lower() in {"1", "true", "yes", "on"}
+    demo_mode: bool = _env_bool("ARGUS_DEMO_MODE", True)
     data_source_mode: str = "offline_demo"
     deepseek_api_key: str = os.getenv("DEEPSEEK_API_KEY", "REPLACE_WITH_DEEPSEEK_API_KEY")
     deepseek_model: str = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
@@ -38,6 +45,21 @@ class Settings:
         "ARGUS_CORS_ORIGINS",
         "http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000",
     )
+    # Redis / tick store
+    redis_url: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    redis_ticks_enabled: bool = _env_bool("ARGUS_REDIS_TICKS_ENABLED", False)
+    tick_ttl_seconds: int = int(os.getenv("ARGUS_TICK_TTL_SECONDS", "3600"))
+    max_ticks_per_symbol: int = int(os.getenv("ARGUS_MAX_TICKS_PER_SYMBOL", "100"))
+    ws_ingest_enabled: bool = _env_bool("ARGUS_WS_INGEST_ENABLED", False)
+    # Celery / LLM queue
+    celery_broker_url: str = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/1")
+    celery_result_backend: str = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/2")
+    llm_queue_enabled: bool = _env_bool("ARGUS_LLM_QUEUE_ENABLED", False)
+    # ARIMA
+    arima_mode: str = os.getenv("ARGUS_ARIMA_MODE", "auto")  # auto | grid
+    arima_max_p: int = int(os.getenv("ARGUS_ARIMA_MAX_P", "5"))
+    arima_max_q: int = int(os.getenv("ARGUS_ARIMA_MAX_Q", "5"))
+    arima_max_d: int = int(os.getenv("ARGUS_ARIMA_MAX_D", "2"))
 
 
 settings = Settings()

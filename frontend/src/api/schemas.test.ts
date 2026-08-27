@@ -243,6 +243,56 @@ describe('Argus API schemas', () => {
     expect(parsed.math_results.arima?.forecast).toHaveLength(3)
   })
 
+  it('parses payloads that include the intraday context layer', () => {
+    const parsed = argusAnalysisSchema.parse({
+      ...analysisPayload,
+      data_lineage: {
+        ...analysisPayload.data_lineage,
+        intraday_context_source: 'CSE_WEBSOCKET_DAYTRADE',
+      },
+      indicator_vote: {
+        ...analysisPayload.indicator_vote,
+        daily_score: 0.05,
+        intraday_nudge: 0.18,
+        components: {
+          ...analysisPayload.indicator_vote.components,
+          order_flow_score: 0.1,
+          intraday_score: 0.08,
+        },
+      },
+      intraday_context: {
+        available: true,
+        source: 'CSE_WEBSOCKET_DAYTRADE',
+        latest_price: 210,
+        last_daily_close: 200,
+        price_divergence_pct: 5,
+        vwap: 205,
+        vwap_deviation_pct: 2.44,
+        trade_intensity: 12,
+        tick_count: 20,
+        order_flow_pressure: 0.33,
+        is_stale: false,
+        staleness_seconds: 3,
+        last_update: 1779692257.73,
+        warnings: [],
+      },
+      quality_flags: {
+        ...analysisPayload.quality_flags,
+        order_book_snapshot: true,
+        intraday_context_available: true,
+      },
+    })
+
+    expect(parsed.intraday_context?.source).toBe('CSE_WEBSOCKET_DAYTRADE')
+    expect(parsed.intraday_context?.available).toBe(true)
+    expect(parsed.indicator_vote.intraday_nudge).toBe(0.18)
+    expect(parsed.indicator_vote.daily_score).toBe(0.05)
+    expect(parsed.indicator_vote.components.order_flow_score).toBe(0.1)
+    expect(parsed.data_lineage.intraday_context_source).toBe('CSE_WEBSOCKET_DAYTRADE')
+    expect(parsed.quality_flags.order_book_snapshot).toBe(true)
+    expect(parsed.quality_flags.intraday_context_available).toBe(true)
+  })
+
   it('parses /health component status', () => {
     const parsed = healthSchema.parse({
       status: 'ok',

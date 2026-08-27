@@ -35,6 +35,7 @@ def safe_int(value: Any, default: int = 0) -> int:
 
 @dataclass(frozen=True)
 class AnalyticsConfig:
+    arima_mode: str = "auto"
     arima_orders: Tuple[Tuple[int, int, int], ...] = (
         (0, 1, 0),
         (1, 1, 0),
@@ -43,6 +44,9 @@ class AnalyticsConfig:
         (2, 1, 1),
         (2, 1, 2),
     )
+    arima_max_p: int = 5
+    arima_max_q: int = 5
+    arima_max_d: int = 2
     ewma_lambda: float = 0.94
     anomaly_lookback: int = 20
 
@@ -113,25 +117,89 @@ class AnalyticsEngine:
         return safe_float(aic + (2 * parameter_count * (parameter_count + 1)) / (n_obs - parameter_count - 1))
 
     def _run_arima(self, frame: pd.DataFrame) -> Dict[str, Any]:
+        if self.config.arima_mode == "grid":
+            return self._run_arima_grid(frame)
+        auto_result = self._run_arima_auto(frame)
+        if auto_result.get("error"):
+            return self._run_arima_grid(frame)
+        return auto_result
+
+    def _run_arima_auto(self, frame: pd.DataFrame) -> Dict[str, Any]:
         log_prices = self._log_prices(frame)
-        result = {
-            "model_used": "fallback",
-            "candidate_models": [f"ARIMA{order}" for order in self.config.arima_orders],
-            "selected_order": [0, 1, 0],
-            "aic": 0.0,
-            "aicc": 0.0,
-            "bic": 0.0,
-            "forecast": [safe_float(frame["close"].iloc[-1])] * 3,
-            "confidence_interval": {
-                "lower": [safe_float(frame["close"].iloc[-1])] * 3,
-                "upper": [safe_float(frame["close"].iloc[-1])] * 3,
-            },
-            "trend": "FLAT",
-            "beats_naive": False,
-            "forecast_confidence": "LOW",
-            "residual_white_noise_pvalue": 0.0,
-            "error": None,
-        }
+        fallback_close = safe_float(frame["close"].iloc[-1])
+        result = self._arima_fallback_result(fallback_close)
+
+        if len(log_prices) < 20:
+            result["error"] = "Insufficient observations for ARIMA"
+            return result
+
+        try:
+            from pmdarima import auto_arima
+        except (ImportError, ValueError) as exc:
+            result["error"] = f"pmdarima unavailable: {exc}"
+            return result
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            try:
+                auto_model = auto_arima(
+                    log_prices.values,
+                    seasonal=False,
+                    start_p=0,
+                    max_p=self.config.arima_max_p,
+                    start_q=0,
+                    max_q=self.config.arima_max_q,
+                    max_d=self.config.arima_max_d,
+                    stepwise=True,
+                    information_criterion="aicc",
+                    suppress_warnings=True,
+                    error_action="ignore",
+                )
+            except Exception as exc:
+                result["error"] = f"auto_arima failed: {exc}"
+                return result
+
+        best_order = tuple(auto_model.order)
+        best_fit = auto_model.arima_res_
+        forecast_vals, conf_int = auto_model.predict(n_periods=3, return_conf_int=True, alpha=0.05)
+        forecast = np.exp(forecast_vals)
+        lower = np.exp(conf_int[:, 0])
+        upper = np.exp(conf_int[:, 1])
+        parameter_count = max(1, sum(best_order))
+        best_aicc = self._aicc(best_fit.aic, len(log_prices), parameter_count)
+
+        beats_naive, lb_pvalue, oos_eval = self._arima_diagnostics(log_prices, best_fit)
+        first = safe_float(forecast[0])
+        last = safe_float(forecast[-1])
+        trend = "UP" if last > first * 1.01 else ("DOWN" if last < first * 0.99 else "FLAT")
+
+        result.update(
+            {
+                "model_used": f"ARIMA{best_order}",
+                "candidate_models": [f"ARIMA{p,d,q} auto search" for p, d, q in [best_order]],
+                "selected_order": list(best_order),
+                "aic": safe_float(best_fit.aic),
+                "aicc": safe_float(best_aicc),
+                "bic": safe_float(best_fit.bic),
+                "forecast": [safe_float(value) for value in forecast],
+                "confidence_interval": {
+                    "lower": [safe_float(value) for value in lower],
+                    "upper": [safe_float(value) for value in upper],
+                },
+                "trend": trend,
+                "beats_naive": beats_naive,
+                "forecast_confidence": "MODERATE" if beats_naive and lb_pvalue > 0.05 else "LOW",
+                "residual_white_noise_pvalue": lb_pvalue,
+                "oos_evaluation": oos_eval,
+                "error": None,
+            }
+        )
+        return result
+
+    def _run_arima_grid(self, frame: pd.DataFrame) -> Dict[str, Any]:
+        log_prices = self._log_prices(frame)
+        fallback_close = safe_float(frame["close"].iloc[-1])
+        result = self._arima_fallback_result(fallback_close)
 
         if len(log_prices) < 20:
             result["error"] = "Insufficient observations for ARIMA"
@@ -163,23 +231,7 @@ class AnalyticsEngine:
         forecast = np.exp(forecast_frame["mean"])
         lower = np.exp(forecast_frame["mean_ci_lower"])
         upper = np.exp(forecast_frame["mean_ci_upper"])
-
-        try:
-            naive_fit = ARIMA(log_prices, order=(0, 1, 0)).fit()
-            model_rmse = np.sqrt(np.nanmean(np.square(best_fit.resid.dropna())))
-            naive_rmse = np.sqrt(np.nanmean(np.square(naive_fit.resid.dropna())))
-            beats_naive = bool(model_rmse < naive_rmse)
-        except Exception:
-            beats_naive = False
-
-        lb_pvalue = 0.0
-        try:
-            resid = best_fit.resid.dropna()
-            if len(resid) > 10:
-                lb_test = acorr_ljungbox(resid, lags=[10], return_df=True)
-                lb_pvalue = safe_float(lb_test["lb_pvalue"].iloc[0])
-        except Exception:
-            lb_pvalue = 0.0
+        beats_naive, lb_pvalue, oos_eval = self._arima_diagnostics(log_prices, best_fit)
 
         first = safe_float(forecast.iloc[0])
         last = safe_float(forecast.iloc[-1])
@@ -201,9 +253,103 @@ class AnalyticsEngine:
                 "beats_naive": beats_naive,
                 "forecast_confidence": "MODERATE" if beats_naive and lb_pvalue > 0.05 else "LOW",
                 "residual_white_noise_pvalue": lb_pvalue,
+                "oos_evaluation": oos_eval,
             }
         )
         return result
+
+    def _arima_fallback_result(self, fallback_close: float) -> Dict[str, Any]:
+        return {
+            "model_used": "fallback",
+            "candidate_models": [f"ARIMA{order}" for order in self.config.arima_orders],
+            "selected_order": [0, 1, 0],
+            "aic": 0.0,
+            "aicc": 0.0,
+            "bic": 0.0,
+            "forecast": [fallback_close] * 3,
+            "confidence_interval": {
+                "lower": [fallback_close] * 3,
+                "upper": [fallback_close] * 3,
+            },
+            "trend": "FLAT",
+            "beats_naive": False,
+            "forecast_confidence": "LOW",
+            "residual_white_noise_pvalue": 0.0,
+            "oos_evaluation": {},
+            "error": None,
+        }
+
+    def _arima_diagnostics(self, log_prices: pd.Series, best_fit) -> Tuple[bool, float, Dict[str, Any]]:
+        """Honest model quality checks.
+
+        - Ljung-Box white-noise test on residuals.
+        - beats_naive via OUT-OF-SAMPLE RMSE: hold out the last ~20% of the
+          series, refit the chosen model on the training part and compare its
+          multi-step forecast RMSE against the standard flat random walk
+          (y[t+1] = y[t]) starting from the same origin. A random-walk-with-
+          drift baseline is also reported for transparency. In-sample residual
+          RMSE is biased in favour of more complex models, so it is only used
+          as a fallback when the refit fails.
+        """
+        beats_naive = False
+        lb_pvalue = 0.0
+        oos: Dict[str, Any] = {}
+
+        try:
+            resid = best_fit.resid.dropna()
+            if len(resid) > 10:
+                lb_test = acorr_ljungbox(resid, lags=[10], return_df=True)
+                lb_pvalue = safe_float(lb_test["lb_pvalue"].iloc[0])
+        except Exception:
+            lb_pvalue = 0.0
+
+        n = int(len(log_prices))
+        holdout = max(15, int(round(n * 0.2)))
+        train_len = n - holdout
+        if train_len >= 40 and holdout >= 5:
+            try:
+                order = tuple(best_fit.model.order)
+                train = log_prices.iloc[:train_len]
+                actual = log_prices.iloc[train_len:].values.astype(float)
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    train_fit = ARIMA(train, order=order).fit()
+                pred = np.asarray(train_fit.get_forecast(steps=holdout).predicted_mean, dtype=float)
+
+                # Honest baselines from the same origin:
+                #   naive_flat: random walk  y[t+1] = y[t]   (standard baseline)
+                #   naive_drift: random walk with the training-period drift (reported for transparency)
+                base = float(train.iloc[-1])
+                naive_flat = np.full(holdout, base, dtype=float)
+                diffs = train.diff().dropna()
+                drift = float(diffs.mean()) if len(diffs) else 0.0
+                naive_drift = np.array([base + drift * (i + 1) for i in range(holdout)], dtype=float)
+
+                model_rmse = float(np.sqrt(np.nanmean((pred - actual) ** 2)))
+                naive_flat_rmse = float(np.sqrt(np.nanmean((naive_flat - actual) ** 2)))
+                naive_drift_rmse = float(np.sqrt(np.nanmean((naive_drift - actual) ** 2)))
+                beats_naive = bool(model_rmse < naive_flat_rmse)
+                oos = {
+                    "holdout_size": int(holdout),
+                    "model_oos_rmse": round(model_rmse, 6),
+                    "naive_flat_rmse": round(naive_flat_rmse, 6),
+                    "naive_drift_rmse": round(naive_drift_rmse, 6),
+                    "beats_naive_oos": beats_naive,
+                }
+            except Exception:
+                oos = {}
+
+        if not oos:
+            # Fallback: in-sample residual RMSE vs pure random walk.
+            try:
+                naive_fit = ARIMA(log_prices, order=(0, 1, 0)).fit()
+                model_rmse = np.sqrt(np.nanmean(np.square(best_fit.resid.dropna())))
+                naive_rmse = np.sqrt(np.nanmean(np.square(naive_fit.resid.dropna())))
+                beats_naive = bool(model_rmse < naive_rmse)
+            except Exception:
+                beats_naive = False
+
+        return beats_naive, lb_pvalue, oos
 
     def _run_volatility(self, frame: pd.DataFrame) -> Dict[str, Any]:
         returns = self._log_returns(frame)
@@ -361,10 +507,16 @@ class AnalyticsEngine:
             reasons.append("Sufficient daily data available within CSE API cap")
         if penalties["model_underperformance"]:
             reasons.append("ARIMA did not outperform random-walk baseline proxy")
-        if anomaly.get("is_anomalous"):
-            reasons.append("Robust anomaly flag is active")
+        if penalties["arima_diagnostics"]:
+            reasons.append("Model residuals failed the white-noise check (Ljung-Box p ≤ 0.05)")
+        if penalties["missing_values"]:
+            reasons.append("Some price data points were missing or estimated")
         if penalties["thin_liquidity"]:
             reasons.append("Latest volume is in the lower historical percentile for this symbol")
+        if penalties["flat_high_low"]:
+            reasons.append("Several sessions traded in near-flat ranges (high ≈ low)")
+        if anomaly.get("is_anomalous"):
+            reasons.append("Robust anomaly flag is active")
 
         return {
             "score": safe_float(score),

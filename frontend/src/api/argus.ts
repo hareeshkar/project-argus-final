@@ -1,16 +1,20 @@
 import { apiBaseUrl, apiFetch } from './client'
-import { argusAnalysisSchema, healthSchema, liveSnapshotSchema, pipelineStageSchema } from './schemas'
-import type { ArgusAnalysis, Health, LiveSnapshot, PipelineStage } from './schemas'
+import { argusAnalysisSchema, chatResponseSchema, healthSchema, liveSnapshotSchema, pipelineStageSchema } from './schemas'
+import type { ArgusAnalysis, ChatResponse, Health, LiveSnapshot, PipelineStage } from './schemas'
 
 export async function getHealth(): Promise<Health> {
   const payload = await apiFetch<unknown>('/health')
   return healthSchema.parse(payload)
 }
 
-export async function analyze(query: string, demoMode: boolean): Promise<ArgusAnalysis> {
+export async function analyze(
+  query: string,
+  demoMode: boolean,
+  copyMode: 'simple' | 'experience' = 'simple',
+): Promise<ArgusAnalysis> {
   const payload = await apiFetch<unknown>('/api/analyze', {
     method: 'POST',
-    body: JSON.stringify({ query, demo_mode: demoMode }),
+    body: JSON.stringify({ query, demo_mode: demoMode, copy_mode: copyMode }),
   })
 
   const parsed = argusAnalysisSchema.safeParse(payload)
@@ -30,6 +34,7 @@ export async function getLiveSnapshot(real = false, duration = 3): Promise<LiveS
 export function streamAnalysis({
   query,
   demoMode,
+  copyMode = 'simple',
   pace = 'fast',
   onStage,
   onFinal,
@@ -37,6 +42,7 @@ export function streamAnalysis({
 }: {
   query: string
   demoMode: boolean
+  copyMode?: 'simple' | 'experience'
   pace?: 'fast' | 'academic'
   onStage: (stage: PipelineStage) => void
   onFinal: (payload: ArgusAnalysis) => void
@@ -45,6 +51,7 @@ export function streamAnalysis({
   const params = new URLSearchParams({
     query,
     demo_mode: String(demoMode),
+    copy_mode: copyMode,
     pace,
   })
   const source = new EventSource(`${apiBaseUrl()}/api/analyze/stream?${params.toString()}`)
@@ -86,4 +93,36 @@ export function streamAnalysis({
   }
 
   return source
+}
+
+export async function postChat({
+  message,
+  history,
+  analysis,
+  symbol,
+  demoMode,
+  copyMode = 'simple',
+  refreshAnalysis = false,
+}: {
+  message: string
+  history?: Array<{ role: string; content: string }>
+  analysis?: ArgusAnalysis
+  symbol?: string
+  demoMode?: boolean
+  copyMode?: 'simple' | 'experience'
+  refreshAnalysis?: boolean
+}): Promise<ChatResponse> {
+  const payload = await apiFetch<unknown>('/api/chat', {
+    method: 'POST',
+    body: JSON.stringify({
+      message,
+      history,
+      analysis,
+      symbol,
+      demo_mode: demoMode,
+      copy_mode: copyMode,
+      refresh_analysis: refreshAnalysis,
+    }),
+  })
+  return chatResponseSchema.parse(payload)
 }

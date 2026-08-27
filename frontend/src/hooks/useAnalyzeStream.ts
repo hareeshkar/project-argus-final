@@ -30,7 +30,15 @@ export function useAnalyzeStream() {
     return () => sourceRef.current?.close()
   }, [])
 
-  const run = ({ query, demoMode }: { query: string; demoMode: boolean }) => {
+  const run = ({
+    query,
+    demoMode,
+    copyMode = 'simple',
+  }: {
+    query: string
+    demoMode: boolean
+    copyMode?: 'simple' | 'experience'
+  }) => {
     sourceRef.current?.close()
     startedRef.current = performance.now()
     setError(undefined)
@@ -41,6 +49,7 @@ export function useAnalyzeStream() {
     sourceRef.current = streamAnalysis({
       query,
       demoMode,
+      copyMode,
       onStage: (stage) => setPipeline((current) => upsertStage(current, stage)),
       onFinal: (payload) => {
         setData(payload)
@@ -70,5 +79,6 @@ export function useAnalyzeStream() {
     isPending,
     latencyMs,
     run,
+    applyAnalysis: setData,
   }
 }

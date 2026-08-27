@@ -144,15 +144,24 @@ export function ForecastChart({
 
 // ─── Risk bar chart (simple, no recharts) ────────────────────────────────────
 
-export function RiskBars({ data }: { data: ArgusAnalysis }) {
+export function RiskBars({
+  data,
+  barLabels,
+}: {
+  data: ArgusAnalysis
+  barLabels?: string[]
+}) {
   const v = data.math_results.volatility
   const dd = data.math_results.drawdown
 
+  const defaultLabels = ['EWMA VaR 95', 'Hist VaR 95', 'Hist VaR 99', 'Max DD']
+  const labels = barLabels ?? defaultLabels
+
   const rows = [
-    { name: 'EWMA VaR 95', value: v?.var_95_pct ?? 0 },
-    { name: 'Hist VaR 95', value: v?.historical_var_95_pct ?? 0 },
-    { name: 'Hist VaR 99', value: v?.historical_var_99_pct ?? 0 },
-    { name: 'Max DD', value: Math.abs(dd?.max_drawdown_pct ?? 0) },
+    { name: labels[0], value: v?.var_95_pct ?? 0 },
+    { name: labels[1], value: v?.historical_var_95_pct ?? 0 },
+    { name: labels[2], value: v?.historical_var_99_pct ?? 0 },
+    { name: labels[3], value: Math.abs(dd?.max_drawdown_pct ?? 0) },
   ]
   const maxVal = Math.max(...rows.map((r) => r.value), 0.01)
 

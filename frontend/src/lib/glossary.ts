@@ -39,4 +39,18 @@ export const GLOSSARY = {
     'Statistical guess of where the price might go next few days, based on past daily closes.',
   modifiedZscore:
     'Robust outlier check — flags unusual price or volume vs recent history.',
+  orderFlowPressure:
+    'Bid vs ask imbalance from the order book snapshot. Positive = more buyers than sellers queued; negative = more sellers. One snapshot, not a time series.',
+  priceDivergence:
+    'How far today’s live price is from the last daily close. A large gap can mean the close is stale or the stock moved sharply.',
+  vwapDeviation:
+    'How far the live price is from today’s volume-weighted average price. Above VWAP = buyers paying up; below = sellers hitting bids.',
+  intradayStale:
+    'The live snapshot has not updated recently, so intraday context is treated as low-weight and unreliable.',
+  intradayContext:
+    'A separate layer that uses order-book pressure and live ticks to nudge the ensemble and flag data quality — without entering the daily ARIMA/VaR models.',
+  intradayNudge:
+    'The small amount the intraday context adds to (or subtracts from) the daily ensemble score. Capped at ±0.20 and damped to zero when stale.',
+  intradayUnavailable:
+    'No live intraday window was available for this symbol, so the analysis is daily-only. The ensemble and confidence reflect the daily statistical models alone.',
 } as const

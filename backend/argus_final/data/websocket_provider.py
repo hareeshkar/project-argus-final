@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import asyncio
-from collections import deque
 from dataclasses import dataclass
 import json
 import random
 import string
 import time
-from typing import Any, Callable, Deque, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import websockets
+
+from argus_final.data.tick_store import InMemoryTickStore, LiveTickStore, TickStore
 
 
 CSE_WS_BASE = "wss://www.cse.lk/api/ws"
@@ -48,97 +49,12 @@ class StompFrame:
         return StompFrame(command=command, headers=headers, body=body)
 
 
-class LiveTickStore:
-    """Bounded in-memory tick store with safe snapshot-based metrics."""
-
-    def __init__(self, max_ticks_per_symbol: int = 100):
-        self.max_ticks_per_symbol = max_ticks_per_symbol
-        self._ticks: Dict[str, Deque[Dict[str, Any]]] = {}
-        self._last_update: Dict[str, float] = {}
-
-    def update_tick(self, symbol: str, tick: Dict[str, Any]) -> None:
-        if symbol not in self._ticks:
-            self._ticks[symbol] = deque(maxlen=self.max_ticks_per_symbol)
-        if "timestamp" not in tick or tick["timestamp"] is None:
-            tick["timestamp"] = time.time()
-        self._ticks[symbol].append(dict(tick))
-        self._last_update[symbol] = time.time()
-
-    def get_ticks(self, symbol: str) -> List[Dict[str, Any]]:
-        return list(self._ticks.get(symbol, []))
-
-    def get_all_symbols(self) -> List[str]:
-        return sorted(self._ticks.keys())
-
-    def memory_stats(self) -> Dict[str, int]:
-        return {
-            "total_symbols": len(self._ticks),
-            "total_ticks": sum(len(ticks) for ticks in self._ticks.values()),
-            "max_ticks_per_symbol": self.max_ticks_per_symbol,
-        }
-
-    def calculate_metrics(self, symbol: str, now: Optional[float] = None) -> Dict[str, Any]:
-        snapshot = self.get_ticks(symbol)
-        if not snapshot:
-            return {
-                "symbol": symbol,
-                "latest_price": 0.0,
-                "vwap": 0.0,
-                "trade_intensity": 0,
-                "price_momentum": 0.0,
-                "window_volume": 0,
-                "tick_count": 0,
-                "last_update": self._last_update.get(symbol),
-            }
-
-        prices: List[float] = []
-        volumes: List[int] = []
-        timestamps: List[float] = []
-        for tick in snapshot:
-            try:
-                price = float(tick.get("price", 0))
-                volume = int(float(tick.get("volume", 0)))
-                timestamp = float(tick.get("timestamp", time.time()))
-            except Exception:
-                continue
-            if price > 0 and volume > 0:
-                prices.append(price)
-                volumes.append(volume)
-                timestamps.append(timestamp)
-
-        if not prices:
-            return {
-                "symbol": symbol,
-                "latest_price": 0.0,
-                "vwap": 0.0,
-                "trade_intensity": 0,
-                "price_momentum": 0.0,
-                "window_volume": 0,
-                "tick_count": 0,
-                "last_update": self._last_update.get(symbol),
-            }
-
-        current_time = now if now is not None else time.time()
-        total_volume = sum(volumes)
-        total_value = sum(price * volume for price, volume in zip(prices, volumes))
-        return {
-            "symbol": symbol,
-            "latest_price": prices[-1],
-            "vwap": total_value / total_volume if total_volume else 0.0,
-            "trade_intensity": len([timestamp for timestamp in timestamps if current_time - timestamp <= 60]),
-            "price_momentum": prices[-1] - prices[0] if len(prices) > 1 else 0.0,
-            "window_volume": total_volume,
-            "tick_count": len(prices),
-            "last_update": self._last_update.get(symbol),
-        }
-
-
 class WebSocketMarketDataProvider:
     """Native final STOMP/SockJS WebSocket provider for CSE daytrade ticks."""
 
     def __init__(
         self,
-        store: Optional[LiveTickStore] = None,
+        store: Optional[TickStore] = None,
         volume_estimator: Optional[Callable[[str], Dict[str, Any]]] = None,
         websocket_base: str = CSE_WS_BASE,
         fallback_websocket_base: str = CSE_LEGACY_WS_BASE,
@@ -147,7 +63,7 @@ class WebSocketMarketDataProvider:
         ping_timeout: float = 30.0,
         close_timeout: float = 5.0,
     ):
-        self.store = store or LiveTickStore()
+        self.store = store or InMemoryTickStore()
         self.volume_estimator = volume_estimator
         self.websocket_base = websocket_base.rstrip("/")
         self.fallback_websocket_base = fallback_websocket_base.rstrip("/")
@@ -348,7 +264,7 @@ class WebSocketMarketDataProvider:
         return metrics
 
     def memory_stats(self) -> Dict[str, int]:
-        return self.store.memory_stats()
+        return self.store.store_stats() if hasattr(self.store, "store_stats") else self.store.memory_stats()
 
     async def capture_for_seconds(
         self,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from contextlib import asynccontextmanager
 from typing import Any, Dict, Optional
 
 from fastapi import FastAPI, HTTPException, Request
@@ -12,16 +13,35 @@ from pydantic import BaseModel
 
 from argus_final import __version__
 from argus_final.core.settings import Settings, settings
-from argus_final.data.websocket_provider import LiveTickStore, WebSocketMarketDataProvider
+from argus_final.data.tick_store import InMemoryTickStore, LiveTickStore, RedisTickStore, build_tick_store
+from argus_final.data.websocket_provider import WebSocketMarketDataProvider
 from argus_final.data.providers import MarketDataProvider
 from argus_final.data.cse_provider import CseRestMarketDataProvider
 from argus_final.llm import DeepSeekNarrator, OpenRouterNarrator, TemplateNarrator
 from argus_final.services import AnalysisService
+from argus_final.services.chat_service import ChatService
+from argus_final.worker.ws_ingest import run_ws_ingest_loop
 
 
 class AnalysisRequest(BaseModel):
     query: str
     demo_mode: Optional[bool] = None
+    copy_mode: Optional[str] = "simple"
+
+
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+
+class ChatRequest(BaseModel):
+    message: str
+    history: Optional[list[ChatMessage]] = None
+    symbol: Optional[str] = None
+    analysis: Optional[Dict[str, Any]] = None
+    demo_mode: Optional[bool] = None
+    copy_mode: Optional[str] = "simple"
+    refresh_analysis: bool = False
 
 
 _trade_summary_cache: Dict[str, Any] = {"ts": 0.0, "rows": {}}
@@ -46,10 +66,33 @@ def create_app(
     app_settings: Settings = settings,
 ) -> FastAPI:
     service = AnalysisService(data_provider=data_provider, narrator=narrator, app_settings=app_settings)
+    chat_service = ChatService(service, app_settings)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        tick_store = build_tick_store(app_settings)
+        app.state.tick_store = tick_store
+        # Share the live tick window with the analysis service so microstructure
+        # can prefer real WebSocket ticks over the REST proxy when available.
+        service.tick_store = tick_store
+        ws_task = None
+        if app_settings.ws_ingest_enabled:
+            ws_task = asyncio.create_task(run_ws_ingest_loop(tick_store))
+        yield
+        if ws_task is not None:
+            ws_task.cancel()
+            try:
+                await ws_task
+            except asyncio.CancelledError:
+                pass
+        if isinstance(tick_store, RedisTickStore):
+            tick_store.close()
+
     app = FastAPI(
         title=app_settings.app_name,
         version=app_settings.version,
         description="Confidence-aware CSE analytics API. Research use only; not investment advice.",
+        lifespan=lifespan,
     )
 
     app.add_middleware(
@@ -69,6 +112,8 @@ def create_app(
 
     @app.get("/health")
     async def health():
+        tick_store = getattr(app.state, "tick_store", InMemoryTickStore())
+        store_kind = "redis" if isinstance(tick_store, RedisTickStore) else "memory"
         return {
             "status": "ok",
             "version": __version__,
@@ -78,18 +123,43 @@ def create_app(
                 "data_provider": "ok",
                 "analytics_engine": "ok",
                 "narrative_provider": narrator_provider_name(service.narrator),
+                "tick_store": store_kind,
+                "llm_queue": "celery" if app_settings.llm_queue_enabled else "inline",
+                "ws_ingest": "enabled" if app_settings.ws_ingest_enabled else "disabled",
+                "arima_mode": app_settings.arima_mode,
+                "chat": "ok",
             },
         }
 
+    @app.post("/api/chat")
+    async def chat(request: ChatRequest):
+        if not request.message.strip():
+            raise HTTPException(status_code=400, detail="message is required")
+        history = [{"role": m.role, "content": m.content} for m in (request.history or [])]
+        return await chat_service.chat(
+            message=request.message.strip(),
+            history=history,
+            symbol=request.symbol,
+            analysis_payload=request.analysis,
+            demo_mode=request.demo_mode,
+            copy_mode=request.copy_mode,
+            refresh_analysis=request.refresh_analysis,
+        )
+
     @app.post("/api/analyze")
     async def analyze(request: AnalysisRequest):
-        return service.analyze(request.query, demo_mode=request.demo_mode)
+        return await service.analyze_async(
+            request.query,
+            demo_mode=request.demo_mode,
+            copy_mode=request.copy_mode,
+        )
 
     @app.get("/api/analyze/stream")
     async def analyze_stream(
         request: Request,
         query: str,
         demo_mode: Optional[bool] = None,
+        copy_mode: Optional[str] = "simple",
         pace: str = "academic",
     ):
         """Stream the analysis pipeline as Server-Sent Events, then emit the final payload."""
@@ -100,7 +170,12 @@ def create_app(
         async def event_stream():
             try:
                 academic_pace = pace.lower() not in {"fast", "none", "off", "0"}
-                for event in service.iter_analysis_events(query, demo_mode=demo_mode, academic_pace=academic_pace):
+                async for event in service.iter_analysis_events(
+                    query,
+                    demo_mode=demo_mode,
+                    academic_pace=academic_pace,
+                    copy_mode=copy_mode,
+                ):
                     if await request.is_disconnected():
                         break
                     yield sse(event["event"], event["data"])
@@ -170,30 +245,38 @@ def create_app(
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     @app.get("/api/live-snapshot")
-    async def live_snapshot(duration: int = 5, real: bool = False):
+    async def live_snapshot(request: Request, duration: int = 5, real: bool = False):
         duration = max(1, min(duration, 30))
-        provider = WebSocketMarketDataProvider(store=LiveTickStore(max_ticks_per_symbol=100))
+        tick_store = getattr(request.app.state, "tick_store", InMemoryTickStore())
         captured = []
+        provider = WebSocketMarketDataProvider(store=tick_store)
 
         def on_trade(symbol, tick, metrics):
             captured.append({"symbol": symbol, "tick": tick, "metrics": metrics})
 
-        if real:
+        symbols = tick_store.get_all_symbols()
+        if not symbols and real and not app_settings.ws_ingest_enabled:
             await provider.capture_for_seconds(duration, on_trade=on_trade)
+            symbols = tick_store.get_all_symbols()
 
-        if not captured:
-            _inject_demo_ticks(provider.store)
+        if not symbols:
+            _inject_demo_ticks(tick_store)
+            symbols = tick_store.get_all_symbols()
 
-        symbol_metrics = {symbol: provider.microstructure(symbol) for symbol in provider.store.get_all_symbols()}
+        symbol_metrics = {symbol: provider.microstructure(symbol) for symbol in symbols}
+        store_stats = tick_store.store_stats() if hasattr(tick_store, "store_stats") else tick_store.memory_stats()
+        mode = "redis_shared_store" if isinstance(tick_store, RedisTickStore) else (
+            "live_cse_websocket" if captured else "deterministic_fallback"
+        )
         return {
-            "mode": "live_cse_websocket" if real and captured else "deterministic_fallback",
+            "mode": mode,
             "requested_real_capture": real,
             "requested_duration_seconds": duration,
-            "live_ticks_captured": len(captured),
+            "live_ticks_captured": store_stats.get("total_ticks", 0),
             "last_error": provider.last_error,
             "metadata": provider.metadata,
-            "memory_stats": provider.memory_stats(),
-            "symbols": provider.store.get_all_symbols(),
+            "memory_stats": store_stats,
+            "symbols": symbols,
             "symbol_metrics": symbol_metrics,
             "latest_summary": provider.latest_summary,
             "latest_most_active_trades": provider.latest_most_active_trades[:10],
@@ -209,10 +292,11 @@ def create_app(
             return f"event: {event_name}\ndata: {json.dumps(payload, default=str)}\n\n"
 
         async def event_stream():
-            provider = WebSocketMarketDataProvider(store=LiveTickStore(max_ticks_per_symbol=100))
+            tick_store = getattr(request.app.state, "tick_store", InMemoryTickStore())
             rest_provider = CseRestMarketDataProvider()
             queue: asyncio.Queue = asyncio.Queue(maxsize=500)
             state = {"disconnected": False}
+            last_metrics_emit: Dict[str, float] = {}
 
             def on_trade(trade_symbol: str, tick, metrics):
                 payload = {"symbol": trade_symbol, "tick": tick, "metrics": metrics}
@@ -223,23 +307,17 @@ def create_app(
                 except asyncio.QueueFull:
                     pass
 
-            async def pump_feed():
-                await provider.run_live_feed(
-                    on_trade=on_trade,
-                    should_continue=lambda: not state["disconnected"],
-                )
-
             async def pump_rest_prices():
                 while not state["disconnected"]:
-                    await asyncio.sleep(8.0)
+                    await asyncio.sleep(1.0)
                     if not symbol or state["disconnected"]:
                         continue
                     try:
-                        row = rest_provider.trade_summary(symbol)
+                        row = rest_provider.trade_summary(symbol, refresh=True)
                         price = row.get("price")
                         if price is None:
                             continue
-                        store_metrics = provider.store.calculate_metrics(symbol)
+                        store_metrics = tick_store.calculate_metrics(symbol)
                         metrics = {
                             "symbol": symbol,
                             "latest_price": float(price),
@@ -266,9 +344,23 @@ def create_app(
                     except Exception:
                         continue
 
-            feed_task = asyncio.create_task(pump_feed())
+            async def pump_shared_metrics():
+                while not state["disconnected"]:
+                    await asyncio.sleep(1.0)
+                    if not symbol or state["disconnected"]:
+                        continue
+                    metrics = tick_store.calculate_metrics(symbol)
+                    if metrics.get("tick_count", 0) <= 0:
+                        continue
+                    now = time.time()
+                    if now - last_metrics_emit.get(symbol, 0) < 1.0:
+                        continue
+                    last_metrics_emit[symbol] = now
+                    queue.put_nowait({"event": "metrics", "payload": {"symbol": symbol, "metrics": metrics}})
+
             rest_task = asyncio.create_task(pump_rest_prices())
-            yield sse("connected", {"symbol": symbol, "status": "streaming"})
+            metrics_task = asyncio.create_task(pump_shared_metrics())
+            yield sse("connected", {"symbol": symbol, "status": "streaming", "store": type(tick_store).__name__})
 
             try:
                 while not await request.is_disconnected():
@@ -276,7 +368,7 @@ def create_app(
                         item = await asyncio.wait_for(queue.get(), timeout=12.0)
                     except asyncio.TimeoutError:
                         if symbol:
-                            store_metrics = provider.store.calculate_metrics(symbol)
+                            store_metrics = tick_store.calculate_metrics(symbol)
                             if store_metrics.get("tick_count", 0) > 0:
                                 yield sse("metrics", {"symbol": symbol, "metrics": store_metrics})
                         yield sse("heartbeat", {"ts": time.time()})
@@ -289,10 +381,9 @@ def create_app(
                     yield sse(event_name, payload)
             finally:
                 state["disconnected"] = True
-                provider.running = False
-                feed_task.cancel()
                 rest_task.cancel()
-                for task in (feed_task, rest_task):
+                metrics_task.cancel()
+                for task in (rest_task, metrics_task):
                     try:
                         await task
                     except asyncio.CancelledError:

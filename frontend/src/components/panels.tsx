@@ -4,6 +4,7 @@ import type { ArgusAnalysis, Health, PipelineStage } from '../api/schemas'
 import type { LivePriceQuote } from '../hooks/useLivePrice'
 import { ForecastChart, RiskBars } from './charts'
 import { fmt } from '../lib/format'
+import { useCopyMode } from '../lib/copy'
 import { GLOSSARY } from '../lib/glossary'
 import {
   Badge,
@@ -28,6 +29,7 @@ export function TopBar({
   marketOpen,
   onMethodology,
   onRaw,
+  onChat,
 }: {
   health?: Health
   data?: ArgusAnalysis
@@ -35,7 +37,9 @@ export function TopBar({
   marketOpen?: boolean
   onMethodology: () => void
   onRaw: () => void
+  onChat: () => void
 }) {
+  const copy = useCopyMode()
   const signal = data?.indicator_vote ?? data?.ensemble
   return (
     <header className="topbar">
@@ -65,7 +69,7 @@ export function TopBar({
           </span>
         </div>
         <div className="topbar-cell" style={{ minWidth: 120 }}>
-          <span className="lbl">Signal</span>
+          <span className="lbl">{copy.topbar('signal')}</span>
           <span className="val">
             <span
               className={
@@ -76,12 +80,12 @@ export function TopBar({
                     : 'neutral'
               }
             >
-              {signal?.signal ?? '—'}
+              {copy.badge('signal', signal?.signal)}
             </span>
           </span>
         </div>
         <div className="topbar-cell" style={{ minWidth: 130 }}>
-          <span className="lbl">Data Mode</span>
+          <span className="lbl">{copy.topbar('dataMode')}</span>
           <span className="val accent-txt">
             {data?.data_source_mode?.replace(/_/g, ' ').toUpperCase() ?? '—'}
           </span>
@@ -89,6 +93,31 @@ export function TopBar({
         <div className="topbar-spacer" />
       </div>
       <div className="topbar-actions">
+        <div className="copy-mode-toggle" role="radiogroup" aria-label="Copy mode">
+          <button
+            type="button"
+            role="radio"
+            aria-checked={copy.mode === 'simple'}
+            aria-label="Simple mode"
+            className={copy.mode === 'simple' ? 'active' : ''}
+            onClick={() => copy.setMode('simple')}
+          >
+            SIMPLE
+          </button>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={copy.mode === 'experience'}
+            aria-label="Experience mode"
+            className={copy.mode === 'experience' ? 'active' : ''}
+            onClick={() => copy.setMode('experience')}
+          >
+            EXPERIENCE
+          </button>
+        </div>
+        <button type="button" onClick={onChat}>
+          CHAT
+        </button>
         <button type="button" onClick={onMethodology}>
           METHODOLOGY
         </button>
@@ -153,13 +182,7 @@ export function QueryConsole({
 
 // ─── Loading pipeline ─────────────────────────────────────────────────────────
 
-const PIPELINE_STAGES = [
-  { id: 'parse', name: 'Parsing symbol from query' },
-  { id: 'fetch', name: 'Fetching CSE REST + microstructure proxy' },
-  { id: 'models', name: 'Running statistical models' },
-  { id: 'confidence', name: 'Computing confidence score' },
-  { id: 'narrative', name: 'Generating analyst summary' },
-]
+const PIPELINE_STAGE_IDS = ['parse', 'fetch', 'models', 'confidence', 'narrative'] as const
 
 function pipelineIcon(status: PipelineStage['status']) {
   if (status === 'done') return 'ok'
@@ -199,6 +222,7 @@ export function LoadingPipeline({
   stages: PipelineStage[]
   complete?: boolean
 }) {
+  const copy = useCopyMode()
   return (
     <div style={{ padding: 24 }}>
       <div className="pipeline">
@@ -206,14 +230,14 @@ export function LoadingPipeline({
           <span>▸ pipeline.run({JSON.stringify(query)})</span>
           {complete && <em>trace retained</em>}
         </h3>
-        {PIPELINE_STAGES.map((s, i) => {
-          const stage = stages.find((item) => item.stage_id === s.id)
+        {PIPELINE_STAGE_IDS.map((id, i) => {
+          const stage = stages.find((item) => item.stage_id === id)
           const status = stage?.status ?? 'queued'
           return (
-            <div key={s.id} className={`pipeline-step ${status}`}>
+            <div key={id} className={`pipeline-step ${status}`}>
               <span className="ico">{pipelineIcon(status)}</span>
               <span className="name">
-                [{String(i + 1).padStart(2, '0')}] {stage?.title ?? s.name}
+                [{String(i + 1).padStart(2, '0')}] {stage?.title ?? copy.pipelineStage(id)}
                 <small>{pipelineDetail(stage)}</small>
               </span>
               <span className="time">{pipelineTime(stage)}</span>
@@ -231,6 +255,8 @@ export function LoadingPipeline({
 // ─── 01 — Analysis overview ───────────────────────────────────────────────────
 
 export function AnalysisOverview({ data }: { data: ArgusAnalysis }) {
+  const copy = useCopyMode()
+  const p = copy.panel('01')
   const signal = data.indicator_vote ?? data.ensemble
   const m = data.microstructure
   const c = data.confidence
@@ -240,7 +266,7 @@ export function AnalysisOverview({ data }: { data: ArgusAnalysis }) {
   return (
     <Panel
       idx="01"
-      title="Analysis Overview"
+      title={p.title}
       meta={data.symbol}
       right={
         <Badge kind="accent">
@@ -251,7 +277,7 @@ export function AnalysisOverview({ data }: { data: ArgusAnalysis }) {
     >
       <div className="hero-grid">
         <div className="hero-cell">
-          <div className="lbl">Confidence Score</div>
+          <div className="lbl">{copy.hero('confidence')}</div>
           <div className="row gap-12" style={{ alignItems: 'baseline' }}>
             <span
               className="val"
@@ -261,29 +287,27 @@ export function AnalysisOverview({ data }: { data: ArgusAnalysis }) {
             >
               {fmt.score(c.score)}
             </span>
-            <span className="lbl-strong">{c.label}</span>
+            <span className="lbl-strong">{copy.badge('confidence', c.label)}</span>
           </div>
-          <div className="companion">Trust in this analysis, not probability of profit.</div>
+          <div className="companion">{copy.hero('confidenceCompanion')}</div>
         </div>
         <div className="hero-cell" style={{ opacity: lowConf ? 0.55 : 1 }}>
-          <div className="lbl">Ensemble Signal</div>
+          <div className="lbl">{copy.hero('signal')}</div>
           <div className="row gap-8">
-            <span className={`val ${tone}`}>{signal?.signal ?? '—'}</span>
-            <SignalBadge signal={signal?.signal} />
+            <span className={`val ${tone}`}>{copy.badge('signal', signal?.signal)}</span>
+            <SignalBadge signal={signal?.signal} label={copy.badge('signal', signal?.signal)} />
           </div>
           <div className="companion">
             score {fmt.signed(signal?.score, 2)} · conf {fmt.score(signal?.confidence)}
           </div>
         </div>
         <div className="hero-cell">
-          <div className="lbl">Latest Price (LKR)</div>
+          <div className="lbl">{copy.hero('price')}</div>
           <div className="val">{fmt.price(m?.latest_price)}</div>
-          <div className="companion">
-            at analysis time · last daily close from CSE REST
-          </div>
+          <div className="companion">{copy.hero('priceCompanion')}</div>
         </div>
         <div className="hero-cell">
-          <div className="lbl">Pipeline</div>
+          <div className="lbl">{copy.hero('pipeline')}</div>
           <div className="val mono" style={{ fontSize: 16 }}>
             {fmt.score(data.processing_time)}s
           </div>
@@ -297,6 +321,8 @@ export function AnalysisOverview({ data }: { data: ArgusAnalysis }) {
 // ─── 02 — Ensemble signal ─────────────────────────────────────────────────────
 
 export function SignalPanel({ data }: { data: ArgusAnalysis }) {
+  const copy = useCopyMode()
+  const p = copy.panel('02')
   const e = data.indicator_vote ?? data.ensemble
   if (!e) return null
 
@@ -306,26 +332,40 @@ export function SignalPanel({ data }: { data: ArgusAnalysis }) {
     { name: 'volatility', value: components.volatility_score },
     { name: 'liquidity', value: components.liquidity_score },
     { name: 'anomaly', value: components.anomaly_score },
+    { name: 'order flow', value: components.order_flow_score },
+    { name: 'intraday', value: components.intraday_score },
   ]
+  const scale = copy.scoreMeter()
+  const dailyScore = e.daily_score
+  const intradayNudge = e.intraday_nudge
+  const hasIntraday = dailyScore != null && intradayNudge != null && Math.abs(intradayNudge) > 1e-9
 
   return (
     <Panel
       idx="02"
-      title="Ensemble Signal"
-      meta="−1 bearish · 0 neutral · +1 bullish"
-      right={<SignalBadge signal={e.signal} />}
+      title={p.title}
+      meta={p.meta}
+      right={<SignalBadge signal={e.signal} label={copy.badge('signal', e.signal)} />}
     >
       <div className="stack-12">
-        <ScoreMeter value={e.score ?? 0} />
+        <ScoreMeter value={e.score ?? 0} scale={scale} />
         <div className="between">
           <span className="lbl">Aggregate Score</span>
           <span className="num" style={{ fontSize: 16 }}>
             {fmt.signed(e.score, 2)}
           </span>
         </div>
+        {hasIntraday && (
+          <div className="muted mono" style={{ fontSize: 10 }}>
+            daily {fmt.signed(dailyScore, 3)} · intraday nudge {fmt.signed(intradayNudge, 3)}
+          </div>
+        )}
         <div className="divider" />
         <div className="lbl-strong">Component Contributions</div>
         <ContribBars items={items} />
+        <div className="muted" style={{ fontSize: 10 }}>
+          trend · volatility · liquidity · anomaly = daily stats; order flow · intraday = live snapshot nudge
+        </div>
         <div className="divider" />
         <div className="lbl-strong">Drivers</div>
         <ul style={{ margin: 0, paddingLeft: 16 }} className="dim">
@@ -346,6 +386,8 @@ export function SignalPanel({ data }: { data: ArgusAnalysis }) {
 // ─── 03 — Confidence & data quality ──────────────────────────────────────────
 
 export function ConfidencePanel({ data }: { data: ArgusAnalysis }) {
+  const copy = useCopyMode()
+  const p = copy.panel('03')
   const c = data.confidence
   const pens = c.penalties ?? {}
   const penRows = Object.entries(pens).map(([name, v]) => [name, v] as [string, number])
@@ -354,14 +396,16 @@ export function ConfidencePanel({ data }: { data: ArgusAnalysis }) {
   return (
     <Panel
       idx="03"
-      title="Confidence & Data Quality"
-      meta="0.00–1.00 trust gauge"
+      title={p.title}
+      meta={p.meta}
       right={
-        <Badge kind={c.score < 0.5 ? 'err' : c.score < 0.7 ? 'warn' : 'ok'}>{c.label}</Badge>
+        <Badge kind={c.score < 0.5 ? 'err' : c.score < 0.7 ? 'warn' : 'ok'}>
+          {copy.badge('confidence', c.label)}
+        </Badge>
       }
     >
       <div className="stack-12">
-        <ConfidenceGauge value={c.score} label={c.label} />
+        <ConfidenceGauge value={c.score} label={copy.badge('confidence', c.label)} />
         <div>
           <div className="lbl-strong" style={{ marginBottom: 6 }}>
             Penalty Breakdown
@@ -415,6 +459,8 @@ export function ConfidencePanel({ data }: { data: ArgusAnalysis }) {
 // ─── 04 — Forecast & ARIMA diagnostics ───────────────────────────────────────
 
 export function ForecastPanel({ data }: { data: ArgusAnalysis }) {
+  const copy = useCopyMode()
+  const p = copy.panel('04')
   const a = data.math_results.arima
   const [showCandidates, setShowCandidates] = useState(false)
   const history = data.price_history?.closes ?? []
@@ -430,7 +476,7 @@ export function ForecastPanel({ data }: { data: ArgusAnalysis }) {
   return (
     <Panel
       idx="04"
-      title="Forecast & ARIMA Diagnostics"
+      title={p.title}
       meta={`${a.model_used} · ${history.length} daily closes`}
       right={
         <span className="row gap-4">
@@ -488,6 +534,16 @@ export function ForecastPanel({ data }: { data: ArgusAnalysis }) {
             <dd>{fmt.score(a.aicc)}</dd>
             <dt>BIC</dt>
             <dd>{fmt.score(a.bic)}</dd>
+            {a.oos_evaluation && (a.oos_evaluation.model_oos_rmse ?? null) != null && (
+              <>
+                <dt>OOS RMSE</dt>
+                <dd>{fmt.score(a.oos_evaluation.model_oos_rmse)}</dd>
+                <dt>Naive RMSE</dt>
+                <dd>{fmt.score(a.oos_evaluation.naive_flat_rmse)}</dd>
+                <dt>Holdout</dt>
+                <dd>{a.oos_evaluation.holdout_size} days</dd>
+              </>
+            )}
           </dl>
           <button
             type="button"
@@ -521,8 +577,12 @@ export function ForecastPanel({ data }: { data: ArgusAnalysis }) {
         {a.beats_naive === false && (
           <Warning
             kind="warn"
-            text="Forecast model did not beat naive baseline. Treat forecast as informational only."
-            source="arima.beats_naive = false"
+            text={
+              a.oos_evaluation?.model_oos_rmse != null
+                ? `Forecast lost to the naive baseline on a ${a.oos_evaluation.holdout_size}-day holdout (model RMSE ${fmt.score(a.oos_evaluation.model_oos_rmse)} vs naive ${fmt.score(a.oos_evaluation.naive_flat_rmse)}). Treat forecast as informational only.`
+                : 'Forecast model did not beat naive baseline. Treat forecast as informational only.'
+            }
+            source="arima.beats_naive = false (out-of-sample evaluation)"
           />
         )}
         {history.length === 0 && (
@@ -537,6 +597,9 @@ export function ForecastPanel({ data }: { data: ArgusAnalysis }) {
         <div className="ascii" style={{ fontSize: 10 }}>
           // gray = real CSE daily closes · yellow = ARIMA 3-day forecast + 95% CI · residual LB p-value:{' '}
           {fmt.score(a.residual_white_noise_pvalue)}
+          {a.oos_evaluation?.beats_naive_oos != null
+            ? ` · beats naive on holdout: ${a.oos_evaluation.beats_naive_oos ? 'YES' : 'NO'} (OOS)`
+            : ''}
         </div>
       </div>
     </Panel>
@@ -546,90 +609,96 @@ export function ForecastPanel({ data }: { data: ArgusAnalysis }) {
 // ─── 05 — Risk metrics ────────────────────────────────────────────────────────
 
 export function RiskPanel({ data }: { data: ArgusAnalysis }) {
+  const copy = useCopyMode()
+  const p = copy.panel('05')
   const v = data.math_results.volatility ?? {}
   const dd = data.math_results.drawdown ?? {}
   const tailRisk = (v.historical_var_95_pct ?? 0) > (v.var_95_pct ?? 0)
+  const daily = copy.risk('dailyVol')
+  const var95 = copy.risk('var95')
+  const hist95 = copy.risk('hist95')
+  const hist99 = copy.risk('hist99')
+  const parkinson = copy.risk('parkinson')
+  const percentile = copy.risk('percentile')
+  const drawdown = copy.risk('drawdown')
+  const maxDd = copy.risk('maxDrawdown')
+  const tail = copy.riskWarning()
 
   return (
     <Panel
       idx="05"
-      title="Risk Metrics"
-      meta="EWMA · Historical VaR · Parkinson · Drawdown"
+      title={p.title}
+      meta={copy.riskMeta()}
       right={
         <Badge
           kind={
             v.risk_level === 'HIGH' ? 'err' : v.risk_level === 'MODERATE' ? 'warn' : 'ok'
           }
         >
-          {v.risk_level ?? '—'}
+          {copy.badge('risk', v.risk_level)}
         </Badge>
       }
     >
       <div className="stack-12">
         <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
           <Kpi
-            label="Daily Volatility"
+            label={daily.label}
             value={fmt.pct(v.daily_volatility_pct)}
-            sub="typical daily move"
-            tip={GLOSSARY.dailyVolatility}
+            sub={daily.sub}
+            tip={daily.tip}
           />
           <Kpi
-            label="Bad Day Loss (95%)"
+            label={var95.label}
             value={fmt.pct(v.var_95_pct)}
-            sub="model estimate"
-            tip={GLOSSARY.varEwma95}
+            sub={var95.sub}
+            tip={var95.tip}
           />
           <Kpi
-            label="Worst Day (95%)"
+            label={hist95.label}
             value={fmt.pct(v.historical_var_95_pct)}
-            sub={tailRisk ? 'heavier than normal' : 'in line with model'}
+            sub={tailRisk ? (copy.mode === 'simple' ? 'heavier than normal' : 'empirical > EWMA') : hist95.sub}
             tone={tailRisk ? 'down' : ''}
-            tip={GLOSSARY.histVar95}
+            tip={hist95.tip}
           />
           <Kpi
-            label="Very Bad Day (99%)"
+            label={hist99.label}
             value={fmt.pct(v.historical_var_99_pct)}
-            sub="from history"
-            tip={GLOSSARY.histVar99}
+            sub={hist99.sub}
+            tip={hist99.tip}
           />
         </div>
         <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
           <Kpi
-            label="Range Volatility"
+            label={parkinson.label}
             value={fmt.pct(v.parkinson_volatility_pct)}
-            sub="high–low based"
-            tip={GLOSSARY.parkinsonVol}
+            sub={parkinson.sub}
+            tip={parkinson.tip}
           />
           <Kpi
-            label="Vol vs History"
+            label={percentile.label}
             value={v.volatility_percentile != null ? `${v.volatility_percentile.toFixed(1)}%` : '—'}
-            sub="for this stock"
-            tip={GLOSSARY.volPercentile}
+            sub={percentile.sub}
+            tip={percentile.tip}
           />
           <Kpi
-            label="Drop from Peak"
+            label={drawdown.label}
             value={fmt.pct(dd.current_drawdown_pct)}
             sub={`${dd.drawdown_duration_days ?? '—'} days`}
             tone="down"
-            tip={GLOSSARY.currentDrawdown}
+            tip={drawdown.tip}
           />
           <Kpi
-            label="Largest Drop"
+            label={maxDd.label}
             value={fmt.pct(dd.max_drawdown_pct)}
-            sub="in data window"
+            sub={maxDd.sub}
             tone="down"
-            tip={GLOSSARY.maxDrawdown}
+            tip={maxDd.tip}
           />
         </div>
-        <RiskBars data={data} />
-        {tailRisk && (
-          <Warning
-            text="Empirical historical VaR exceeds parametric EWMA VaR — tail risk is heavier than normal-distribution assumption implies."
-            source="volatility.historical_var_95_pct > volatility.var_95_pct"
-          />
-        )}
+        <RiskBars data={data} barLabels={copy.riskBars()} />
+        {tailRisk && <Warning text={tail.text} source={tail.source} />}
         <div className="ascii" style={{ fontSize: 10 }}>
-          // σ percentile is relative to this stock's own historical distribution, not market-wide
+          {copy.riskNote()}
         </div>
       </div>
     </Panel>
@@ -639,6 +708,8 @@ export function RiskPanel({ data }: { data: ArgusAnalysis }) {
 // ─── 06 — Trend / OLS regression ─────────────────────────────────────────────
 
 export function TrendPanel({ data }: { data: ArgusAnalysis }) {
+  const copy = useCopyMode()
+  const p = copy.panel('06')
   const lr = data.math_results.trend ?? {}
   const regime = data.math_results.regime?.trend_regime
   const slopeTone: 'up' | 'down' | 'neutral' =
@@ -647,8 +718,8 @@ export function TrendPanel({ data }: { data: ArgusAnalysis }) {
   return (
     <Panel
       idx="06"
-      title="Trend / OLS Regression"
-      meta={`${lr.days_analyzed ?? '—'}-day window`}
+      title={p.title}
+      meta={p.meta ?? `${lr.days_analyzed ?? '—'}-day window`}
       right={
         <Badge kind={(lr.r_squared ?? 0) > 0.5 ? 'ok' : (lr.r_squared ?? 0) > 0.25 ? 'warn' : 'err'}>
           {lr.is_strong_trend ? 'STRONG FIT' : 'WEAK FIT'}
@@ -669,8 +740,8 @@ export function TrendPanel({ data }: { data: ArgusAnalysis }) {
         />
         <Kpi
           label="Direction"
-          value={lr.trend_direction ?? '—'}
-          sub={`regime: ${regime ?? '—'}`}
+          value={copy.enumLabel('trend', lr.trend_direction)}
+          sub={`regime: ${copy.enumLabel('trend', regime)}`}
           tone={slopeTone}
         />
         <Kpi label="N (days)" value={lr.days_analyzed ?? '—'} sub="OLS on log-close" />
@@ -685,6 +756,8 @@ export function TrendPanel({ data }: { data: ArgusAnalysis }) {
 // ─── 07 — Anomaly detection ───────────────────────────────────────────────────
 
 export function AnomalyPanel({ data }: { data: ArgusAnalysis }) {
+  const copy = useCopyMode()
+  const p = copy.panel('07')
   const z = data.math_results.anomaly
   if (!z || z.error) return null
 
@@ -704,8 +777,8 @@ export function AnomalyPanel({ data }: { data: ArgusAnalysis }) {
   return (
     <Panel
       idx="07"
-      title="Anomaly Detection"
-      meta={`Z-score · lookback ${z.lookback_days ?? 20}d`}
+      title={p.title}
+      meta={p.meta ?? `Z-score · lookback ${z.lookback_days ?? 20}d`}
       right={
         <Badge kind={z.is_anomalous ? 'warn' : 'ok'}>
           {z.is_anomalous ? 'ANOMALY FLAGGED' : 'WITHIN NORMS'}
@@ -776,20 +849,22 @@ export function AnomalyPanel({ data }: { data: ArgusAnalysis }) {
 // ─── 08 — Market regime ───────────────────────────────────────────────────────
 
 export function RegimePanel({ data }: { data: ArgusAnalysis }) {
+  const copy = useCopyMode()
+  const p = copy.panel('08')
   const r = data.math_results.regime
   if (!r) return null
 
   return (
-    <Panel idx="08" title="Market Regime" meta="trend · vol · liquidity">
+    <Panel idx="08" title={p.title} meta={p.meta}>
       <div className="regime-grid">
         <div className="regime-cell">
           <div className="lbl">Trend Regime</div>
-          <div className="val">{r.trend_regime ?? '—'}</div>
+          <div className="val">{copy.enumLabel('trend', r.trend_regime)}</div>
         </div>
         <div className="regime-cell">
           <div className="lbl">Volatility Regime</div>
           <div className={`val${r.volatility_regime === 'HIGH' ? ' down' : ''}`}>
-            {r.volatility_regime ?? '—'}
+            {copy.enumLabel('volRegime', r.volatility_regime)}
           </div>
           {r.volatility_percentile != null && (
             <>
@@ -810,7 +885,7 @@ export function RegimePanel({ data }: { data: ArgusAnalysis }) {
         <div className="regime-cell">
           <div className="lbl">Liquidity Regime</div>
           <div className={`val${r.liquidity_regime === 'THIN' ? ' warn' : ''}`}>
-            {r.liquidity_regime ?? '—'}
+            {copy.enumLabel('liquidity', r.liquidity_regime)}
           </div>
           {r.volume_percentile != null && (
             <>
@@ -836,6 +911,8 @@ export function RegimePanel({ data }: { data: ArgusAnalysis }) {
 // ─── 09 — Order book pressure ─────────────────────────────────────────────────
 
 export function OrderBookPanel({ data }: { data: ArgusAnalysis }) {
+  const copy = useCopyMode()
+  const p = copy.panel('09')
   const ob = data.order_book
   if (!ob || (ob.bids == null && ob.asks == null)) return null
 
@@ -847,8 +924,8 @@ export function OrderBookPanel({ data }: { data: ArgusAnalysis }) {
   return (
     <Panel
       idx="09"
-      title="Order Book Pressure"
-      meta="aggregate REST snapshot"
+      title={p.title}
+      meta={p.meta}
       right={
         <Badge kind={press > 0.15 ? 'ok' : press < -0.15 ? 'err' : 'neutral'}>
           {press > 0 ? 'BID-WEIGHTED' : press < 0 ? 'ASK-WEIGHTED' : 'BALANCED'}
@@ -922,6 +999,8 @@ export function MicrostructurePanel({
   isLive?: boolean
   polling?: boolean
 }) {
+  const copy = useCopyMode()
+  const p = copy.panel('10')
   const base = data.microstructure ?? {}
   const price = liveQuote?.price ?? base.latest_price
   const change = liveQuote?.change ?? null
@@ -933,8 +1012,8 @@ export function MicrostructurePanel({
   return (
     <Panel
       idx="10"
-      title="Live Price"
-      meta={marketOpen ? 'CSE trade summary · 1s' : 'last close'}
+      title={p.title}
+      meta={p.meta ?? (marketOpen ? 'CSE trade summary · 1s' : 'last close')}
       right={
         <span className="row gap-4">
           <InfoTip text={GLOSSARY.liveTrading} />
@@ -986,6 +1065,155 @@ export function MicrostructurePanel({
         {marketOpen && !isLive && (
           <Warning kind="info" text="Waiting for live price from the exchange — this refreshes every second during market hours." />
         )}
+        {data.intraday_context && data.intraday_context.available && (
+          <div className="muted mono" style={{ fontSize: 10, lineHeight: 1.6 }}>
+            intraday ctx:{' '}
+            {data.intraday_context.source === 'CSE_WEBSOCKET_DAYTRADE'
+              ? 'websocket ticks'
+              : data.intraday_context.source === 'CSE_REST_TRADE_SUMMARY'
+                ? 'rest snapshot'
+                : data.intraday_context.source === 'DEMO_INTRADAY'
+                  ? 'demo (synthetic)'
+                  : (data.intraday_context.source ?? '—')}
+            {data.intraday_context.price_divergence_pct != null && (
+              <> · vs close {fmt.signed(data.intraday_context.price_divergence_pct, 2)}%</>
+            )}
+            {data.intraday_context.vwap_deviation_pct != null && (
+              <> · vs vwap {fmt.signed(data.intraday_context.vwap_deviation_pct, 2)}%</>
+            )}
+            {data.intraday_context.is_stale && <> · stale</>}
+          </div>
+        )}
+      </div>
+    </Panel>
+  )
+}
+
+// ─── 14 — Intraday context ────────────────────────────────────────────────────
+
+export function IntradayContextPanel({ data }: { data: ArgusAnalysis }) {
+  const copy = useCopyMode()
+  const p = copy.panel('14')
+  const ctx = data.intraday_context
+  const vote = data.indicator_vote
+  const components = vote?.components ?? {}
+
+  // Daily-only state: no live intraday window for this symbol.
+  if (!ctx || !ctx.available) {
+    return (
+      <Panel idx="14" title={p.title} meta={p.meta}>
+        <div className="stack-12">
+          <Badge kind="neutral">DAILY-ONLY</Badge>
+          <Warning kind="info" text={GLOSSARY.intradayUnavailable} />
+          <div className="muted mono" style={{ fontSize: 10 }}>
+            source: {ctx?.source ?? 'UNAVAILABLE'} · ensemble nudge 0.000
+          </div>
+        </div>
+      </Panel>
+    )
+  }
+
+  const pressure = ctx.order_flow_pressure ?? 0
+  const divergence = ctx.price_divergence_pct
+  const vwapDev = ctx.vwap_deviation_pct
+  const stale = Boolean(ctx.is_stale)
+  const isDemo = ctx.source === 'DEMO_INTRADAY'
+  const sourceLabel =
+    ctx.source === 'CSE_WEBSOCKET_DAYTRADE'
+      ? 'WEBSOCKET TICKS'
+      : ctx.source === 'CSE_REST_TRADE_SUMMARY'
+        ? 'REST SNAPSHOT'
+        : ctx.source === 'DEMO_INTRADAY'
+          ? 'DEMO (synthetic)'
+          : (ctx.source ?? '—')
+
+  const nudge = vote?.intraday_nudge
+  const dailyScore = vote?.daily_score
+  const combinedScore = vote?.score
+  const hasNudge = nudge != null && dailyScore != null
+
+  return (
+    <Panel
+      idx="14"
+      title={p.title}
+      meta={p.meta}
+      right={
+        <span className="row gap-4">
+          <InfoTip text={GLOSSARY.intradayContext} />
+          <span className={`dot ${stale || isDemo ? 'idle' : 'live'}`} />
+          <Badge kind={stale ? 'warn' : isDemo ? 'neutral' : 'ok'}>
+            {stale ? 'STALE' : isDemo ? 'DEMO' : 'LIVE'}
+          </Badge>
+        </span>
+      }
+    >
+      <div className="stack-12">
+        <div className="muted mono" style={{ fontSize: 10 }}>
+          source: {sourceLabel}
+          {ctx.tick_count != null && <> · {ctx.tick_count} ticks</>}
+          {ctx.last_update != null && <> · updated {fmt.ago(ctx.last_update)}</>}
+        </div>
+
+        {isDemo && (
+          <div className="ascii" style={{ fontSize: 10 }}>
+            // synthetic intraday window — demo mode has no live exchange feed
+          </div>
+        )}
+
+        <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(2, 1fr)' }}>
+          <Kpi
+            label="vs Last Close"
+            value={fmt.signedPct(divergence)}
+            tip={GLOSSARY.priceDivergence}
+          />
+          <Kpi
+            label="vs VWAP"
+            value={fmt.signedPct(vwapDev)}
+            tip={GLOSSARY.vwapDeviation}
+          />
+          <Kpi
+            label="Order Flow"
+            value={fmt.signed(pressure, 4)}
+            sub={pressure > 0.15 ? 'bid-heavy' : pressure < -0.15 ? 'ask-heavy' : 'balanced'}
+            tip={GLOSSARY.orderFlowPressure}
+          />
+          <Kpi
+            label="Trade Intensity"
+            value={ctx.trade_intensity != null ? `${ctx.trade_intensity}/min` : '—'}
+            tip={GLOSSARY.tradeIntensity}
+          />
+        </div>
+
+        <div className="divider" />
+        <div className="lbl-strong">
+          Ensemble nudge <InfoTip text={GLOSSARY.intradayNudge} />
+        </div>
+        <ContribBars
+          items={[
+            { name: 'order flow', value: components.order_flow_score },
+            { name: 'intraday', value: components.intraday_score },
+          ]}
+        />
+        {hasNudge && (
+          <div className="muted mono" style={{ fontSize: 10 }}>
+            daily {fmt.signed(dailyScore, 3)} + nudge {fmt.signed(nudge, 3)} = {fmt.signed(combinedScore, 3)}
+          </div>
+        )}
+
+        {stale && <Warning kind="warn" text={GLOSSARY.intradayStale} />}
+        {ctx.warnings.length > 0 && (
+          <ul style={{ margin: 0, paddingLeft: 16 }} className="dim">
+            {ctx.warnings.map((w, i) => (
+              <li key={i} style={{ fontSize: 11, lineHeight: 1.5, fontFamily: 'var(--font-mono)' }}>
+                {w}
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <div className="ascii" style={{ fontSize: 10 }}>
+          // separate from ARIMA/VaR — daily models stay on daily data
+        </div>
       </div>
     </Panel>
   )
@@ -994,6 +1222,8 @@ export function MicrostructurePanel({
 // ─── 11 — Analyst summary (LLM) ───────────────────────────────────────────────
 
 export function LLMPanel({ data }: { data: ArgusAnalysis }) {
+  const copy = useCopyMode()
+  const p = copy.panel('11')
   const l = data.llm_explanation
   if (!l) return null
 
@@ -1006,7 +1236,7 @@ export function LLMPanel({ data }: { data: ArgusAnalysis }) {
   return (
     <Panel
       idx="11"
-      title="Plain-English Summary"
+      title={p.title}
       meta={data.data_lineage?.llm_provider ?? 'analyst'}
       right={<Badge kind="warn">NOT ADVICE</Badge>}
     >
@@ -1030,18 +1260,20 @@ export function LLMPanel({ data }: { data: ArgusAnalysis }) {
           {obj?.summary && (
             <div style={{ borderLeft: '2px solid var(--accent)', paddingLeft: 12 }}>
               <div className="lbl-strong" style={{ marginBottom: 6 }}>
-                What the data says
-                <InfoTip text="A plain-language read of the computed metrics — not a buy or sell call." />
+                {copy.llmSection('summary')}
+                <InfoTip text={copy.llmSection('summaryTip')} />
               </div>
               <div style={{ fontSize: 13.5, lineHeight: 1.65, color: 'var(--ink-dim)' }}>
                 {obj.summary}
               </div>
               {signal && (
                 <div style={{ marginTop: 8, fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--ink-mute)' }}>
-                  Model lean:{' '}
-                  <span className={tone === 'up' ? 'up' : tone === 'down' ? 'down' : ''}>{signal}</span>
+                  {copy.llmSection('modelLean')}:{' '}
+                  <span className={tone === 'up' ? 'up' : tone === 'down' ? 'down' : ''}>
+                    {copy.badge('signal', signal)}
+                  </span>
                   {' · '}
-                  Trust: {data.confidence?.label ?? '—'}
+                  {copy.llmSection('trustLabel')}: {copy.badge('confidence', data.confidence?.label)}
                 </div>
               )}
             </div>
@@ -1049,8 +1281,8 @@ export function LLMPanel({ data }: { data: ArgusAnalysis }) {
           {(obj?.risk_notes ?? []).length > 0 && (
             <div>
               <div className="lbl-strong" style={{ marginBottom: 6 }}>
-                Things to watch
-                <InfoTip text="Caveats and risks pulled from the data — not predictions." />
+                {copy.llmSection('risks')}
+                <InfoTip text={copy.llmSection('risksTip')} />
               </div>
               <ul style={{ margin: 0, paddingLeft: 18, color: 'var(--ink-dim)' }}>
                 {(obj?.risk_notes ?? []).map((r, i) => (
@@ -1064,7 +1296,7 @@ export function LLMPanel({ data }: { data: ArgusAnalysis }) {
           {obj?.confidence_explanation && (
             <div>
               <div className="lbl-strong" style={{ marginBottom: 4 }}>
-                How much to trust this
+                {copy.llmSection('trust')}
                 <InfoTip text={GLOSSARY.confidenceScore} />
               </div>
               <div style={{ fontSize: 12.5, lineHeight: 1.6, color: 'var(--ink-dim)' }}>
@@ -1087,9 +1319,11 @@ export function LLMPanel({ data }: { data: ArgusAnalysis }) {
 // ─── 12 — Data lineage ────────────────────────────────────────────────────────
 
 export function LineagePanel({ data }: { data: ArgusAnalysis }) {
+  const copy = useCopyMode()
+  const p = copy.panel('12')
   const l = data.data_lineage ?? {}
   return (
-    <Panel idx="12" title="Data Lineage" meta="provenance for thesis audit">
+    <Panel idx="12" title={p.title} meta={p.meta}>
       <dl className="kv">
         <dt>data_source_mode</dt>
         <dd>{data.data_source_mode ?? '—'}</dd>
@@ -1099,6 +1333,10 @@ export function LineagePanel({ data }: { data: ArgusAnalysis }) {
         <dd>{l.live_source ?? '—'}</dd>
         <dt>order_book_source</dt>
         <dd>{l.order_book_source ?? '—'}</dd>
+        <dt>intraday_context</dt>
+        <dd>{l.intraday_context_source ?? '—'}</dd>
+        <dt>copy_mode</dt>
+        <dd>{l.copy_mode ?? data.copy_mode ?? '—'}</dd>
         <dt>llm_provider</dt>
         <dd>{l.llm_provider ?? '—'}</dd>
         <dt>historical_rows</dt>
@@ -1115,9 +1353,13 @@ export function LineagePanel({ data }: { data: ArgusAnalysis }) {
       <div className="warning info" style={{ marginTop: 10, border: '1px solid var(--line)' }}>
         <span className="icon">●</span>
         <div className="body">
-          CSE REST provides ~240 daily OHLCV rows per symbol (period=5 chart endpoint). Live
-          ticks are not wired into analysis — Panel 10 polls tradeSummary separately. Demo
-          checkbox forces in-memory synthetic data for offline runs.
+          CSE REST provides ~240 daily OHLCV rows per symbol (period=5 chart endpoint) which feed
+          ARIMA/VaR/trend. Order book and live microstructure are a separate intraday context layer
+          — a lightly weighted ensemble nudge plus quality flags, never mixed into the daily models.
+          When the WebSocket tick store has live ticks for a symbol, it is preferred over the REST
+          tradeSummary proxy. Demo checkbox forces in-memory synthetic data for offline runs; in demo
+          mode a synthetic intraday window (DEMO_INTRADAY) is generated from the last daily bar so the
+          intraday layer is still exercised and labeled honestly as synthetic.
         </div>
       </div>
     </Panel>
@@ -1127,6 +1369,8 @@ export function LineagePanel({ data }: { data: ArgusAnalysis }) {
 // ─── 13 — Quality flags ───────────────────────────────────────────────────────
 
 export function QualityFlagsPanel({ data }: { data: ArgusAnalysis }) {
+  const copy = useCopyMode()
+  const p = copy.panel('13')
   const q = data.quality_flags ?? {}
   const ns = data.node_status ?? {}
 
@@ -1135,13 +1379,15 @@ export function QualityFlagsPanel({ data }: { data: ArgusAnalysis }) {
     ['has_null_open_prices', q.has_null_open_prices],
     ['used_open_price_proxy', q.used_open_price_proxy],
     ['is_stale', q.is_stale],
+    ['order_book_snapshot', q.order_book_snapshot],
+    ['intraday_context_available', q.intraday_context_available],
     ['low_liquidity_warning', q.low_liquidity_warning],
     ['api_latency_warning', q.api_latency_warning],
     ['model_warning', q.model_warning],
   ]
 
   return (
-    <Panel idx="13" title="Quality Flags" meta="schema integrity">
+    <Panel idx="13" title={p.title} meta={p.meta}>
       <div className="stack-4">
         {flags.map(([k, v]) => (
           <div
@@ -1209,10 +1455,12 @@ export function MethodologyDrawer({ onClose }: { onClose: () => void }) {
           <h3>01 · Data ingestion</h3>
           <p>
             Historical daily bars are pulled from the <code>CSE_REST</code> endpoint, capped at
-            approximately <code>120–240</code> rows per symbol. Analysis-time microstructure uses a
-            REST trade-summary proxy; the ticker tape can separately sample the CSE{' '}
-            <code>DAYTRADE</code> WebSocket when available. Order-book snapshots come from the REST
-            order-book endpoint.
+            approximately <code>120–240</code> rows per symbol. When the shared WebSocket tick store
+            has live <code>DAYTRADE</code> ticks for a symbol, analysis prefers them over the REST
+            trade-summary proxy and lineage reports <code>CSE_WEBSOCKET_DAYTRADE</code>; otherwise it
+            falls back to <code>CSE_REST_TRADE_SUMMARY</code>. Order-book snapshots come from the REST
+            order-book endpoint. Live ticks and order book feed a separate <strong>intraday context
+            layer</strong> — they never enter the daily models.
           </p>
           <h3>02 · ARIMA selection</h3>
           <p>
@@ -1236,15 +1484,21 @@ export function MethodologyDrawer({ onClose }: { onClose: () => void }) {
           </p>
           <h3>05 · Ensemble signal</h3>
           <p>
-            Weighted combination of trend, volatility, liquidity, and anomaly components. Score
-            range is −1 to +1. <code>NEUTRAL</code> is a legitimate, common outcome. This is not a
-            buy/sell signal.
+            Weighted combination of trend, volatility, liquidity, and anomaly components from the
+            daily models. Score range is −1 to +1. A separate <strong>intraday context layer</strong>
+            then adds a small, staleness-damped nudge (capped at ±0.20) from order-flow pressure and
+            live price vs VWAP/close divergence — shown as <code>order flow</code> and{' '}
+            <code>intraday</code> contributions in Panel 02. <code>math_results.indicator_vote</code>{' '}
+            stays the pure daily ensemble; the top-level vote is the combined view.{' '}
+            <code>NEUTRAL</code> is a legitimate, common outcome. This is not a buy/sell signal.
           </p>
           <h3>06 · Confidence</h3>
           <p>
             Confidence (0–1) measures trust in the analysis, not probability of profit. Computed as{' '}
             <code>1 − Σ penalties</code> across insufficient data rows, model underperformance,
-            ARIMA diagnostics, missing values, thin liquidity, and flat high-low ratio.
+            ARIMA diagnostics, missing values, thin liquidity, and flat high-low ratio. The intraday
+            context layer adds penalties for material price divergence from the last daily close and
+            for stale live snapshots.
           </p>
           <h3>07 · Disclaimer</h3>
           <p>

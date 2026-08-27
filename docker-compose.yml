@@ -1,0 +1,40 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --save 60 1 --loglevel warning
+
+  celery-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.worker
+    environment:
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      REDIS_URL: redis://redis:6379/0
+      ARGUS_REDIS_TICKS_ENABLED: "true"
+      ARGUS_LLM_QUEUE_ENABLED: "true"
+      ARGUS_WS_INGEST_ENABLED: "false"
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+    depends_on:
+      - redis
+    command: celery -A argus_final.worker.celery_app worker --loglevel=info --concurrency=2
+
+  ws-ingest:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.worker
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      ARGUS_REDIS_TICKS_ENABLED: "true"
+      ARGUS_WS_INGEST_ENABLED: "true"
+    depends_on:
+      - redis
+    command: python -m argus_final.worker.ws_ingest
+
+volumes:
+  redis-data:

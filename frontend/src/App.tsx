@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 
+import { CopyModeProvider, useCopyMode } from './lib/copy'
 import './App.css'
 import {
   AnalysisOverview,
   AnomalyPanel,
   ConfidencePanel,
   ForecastPanel,
+  IntradayContextPanel,
   LineagePanel,
   LLMPanel,
   LoadingPipeline,
@@ -21,7 +23,9 @@ import {
   TopBar,
   TrendPanel,
 } from './components/panels'
+import { ChatDrawer } from './components/chat'
 import { useAnalyzeStream } from './hooks/useAnalyzeStream'
+import { useChat } from './hooks/useChat'
 import { useHealth } from './hooks/useHealth'
 import { useLivePrice } from './hooks/useLivePrice'
 import { useMarketPrices } from './hooks/useMarketPrices'
@@ -51,15 +55,18 @@ const WATCHLIST = [
   { sym: 'RICH.N0000', name: 'Richard Pieris' },
 ]
 
-function App() {
+function AppShell() {
+  const { mode: copyMode } = useCopyMode()
   const [query, setQuery]             = useState('Analyze COMB')
   const [demoMode, setDemoMode]       = useState(false)
   const [drawerOpen, setDrawerOpen]   = useState(false)
   const [methodOpen, setMethodOpen]   = useState(false)
+  const [chatOpen, setChatOpen]       = useState(false)
   const [pipelineQuery, setPipelineQuery] = useState(query)
 
   const health        = useHealth()
   const analyze       = useAnalyzeStream()
+  const chat          = useChat()
   const marketPrices  = useMarketPrices(!demoMode)
   const [marketOpen, setMarketOpen] = useState(isCseOpen())
   const busy = analyze.isPending
@@ -77,6 +84,7 @@ function App() {
       if (event.key !== 'Escape') return
       setDrawerOpen(false)
       setMethodOpen(false)
+      setChatOpen(false)
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
@@ -86,7 +94,7 @@ function App() {
     const q = sym ? `Analyze ${sym.split('.')[0]}` : query
     if (sym) setQuery(q)
     setPipelineQuery(q)
-    analyze.run({ query: q, demoMode })
+    analyze.run({ query: q, demoMode, copyMode })
   }
 
   const showPipeline = busy || analyze.pipeline.length > 0
@@ -114,7 +122,8 @@ function App() {
           latency={analyze.latencyMs}
           marketOpen={marketOpen}
           onMethodology={() => setMethodOpen(true)}
-        onRaw={() => setDrawerOpen(true)}
+          onRaw={() => setDrawerOpen(true)}
+          onChat={() => setChatOpen(true)}
       />
 
       {/* Ticker tape */}
@@ -234,6 +243,7 @@ function App() {
               <AnomalyPanel data={data} />
               <RegimePanel data={data} />
               <OrderBookPanel data={data} />
+              <IntradayContextPanel data={data} />
               <LineagePanel data={data} />
               <QualityFlagsPanel data={data} />
             </>
@@ -289,6 +299,27 @@ function App() {
         <RawJsonDrawer data={data} latency={analyze.latencyMs} onClose={() => setDrawerOpen(false)} />
       )}
       {methodOpen && <MethodologyDrawer onClose={() => setMethodOpen(false)} />}
+      <ChatDrawer
+        open={chatOpen}
+        onClose={() => setChatOpen(false)}
+        analysis={data}
+        demoMode={demoMode}
+        messages={chat.messages}
+        isPending={chat.isPending}
+        isRefreshing={chat.isRefreshing}
+        error={chat.error}
+        onClear={chat.clear}
+        onSend={(message, refreshAnalysis) =>
+          chat.send({
+            message,
+            analysis: data,
+            demoMode,
+            copyMode,
+            refreshAnalysis,
+            onAnalysisUpdate: analyze.applyAnalysis,
+          })
+        }
+      />
     </div>
   )
 }
@@ -315,4 +346,10 @@ function EmptyState() {
   )
 }
 
-export default App
+export default function App() {
+  return (
+    <CopyModeProvider>
+      <AppShell />
+    </CopyModeProvider>
+  )
+}

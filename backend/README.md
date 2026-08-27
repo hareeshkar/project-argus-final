@@ -46,11 +46,12 @@ When `demo_mode` is `false`, the response lineage should show:
 {
   "historical_source": "CSE_REST",
   "order_book_source": "CSE_REST_ORDERBOOK",
-  "live_source": "NOT_CONFIGURED"
+  "live_source": "CSE_REST_TRADE_SUMMARY",
+  "intraday_context_source": "CSE_REST_TRADE_SUMMARY"
 }
 ```
 
-`live_source` remains `NOT_CONFIGURED` for REST-only analysis because WebSocket ticks are a separate provider/ingestion layer. `CseRestMarketDataProvider` is intentionally REST-only; `WebSocketMarketDataProvider` owns `/topic/daytrade` ticks.
+`live_source` is `CSE_REST_TRADE_SUMMARY` for REST-only analysis (microstructure proxy from `tradeSummary`). When the shared WebSocket tick store has live ticks for the symbol, `live_source` becomes `CSE_WEBSOCKET_DAYTRADE` and the intraday context layer prefers real ticks. `CseRestMarketDataProvider` is intentionally REST-only; `WebSocketMarketDataProvider` owns `/topic/daytrade` ticks.
 
 ## Live Volume Enrichment
 
@@ -94,6 +95,17 @@ The official site combines that WebSocket feed with REST endpoints that do inclu
 - `/topic/today-sharePrice`, `/user/topic/today-sharePrice`
 - `/topic/summary`, `/user/topic/summary`
 - `/topic/most-active-trades`, `/user/topic/most-active-trades`
+
+## Intraday Context Layer
+
+Order book pressure and live microstructure live on a different time scale than the daily OHLCV history, so they are **not** fed into ARIMA/VaR. Instead `argus_final/analytics/intraday_context.py` builds a separate context block from the resolved microstructure + order book snapshot:
+
+- descriptive metrics: price divergence vs last daily close, VWAP deviation, trade intensity, order-flow pressure,
+- a small, **staleness-damped** ensemble nudge (`order_flow_score` + `intraday_score`, capped at ±0.20) added on top of the daily `indicator_vote` score,
+- confidence penalties for material price divergence / stale snapshots,
+- quality flags (`is_stale`, `order_book_snapshot`, `intraday_context_available`).
+
+`math_results.indicator_vote` stays the pure daily ensemble; the top-level `indicator_vote` / `ensemble` is the combined daily + intraday view. When the shared tick store has live ticks for a symbol, `AnalysisService` prefers them over the REST `tradeSummary` microstructure proxy and lineage reports `live_source: CSE_WEBSOCKET_DAYTRADE`; otherwise it falls back to REST and labels it honestly.
 
 ## Test Commands
 

@@ -231,7 +231,7 @@ export function Badge({
   )
 }
 
-export function SignalBadge({ signal }: { signal?: string }) {
+export function SignalBadge({ signal, label }: { signal?: string; label?: string }) {
   const map: Record<string, 'bull' | 'bear' | 'neutral' | 'err'> = {
     BULLISH: 'bull',
     BEARISH: 'bear',
@@ -239,7 +239,9 @@ export function SignalBadge({ signal }: { signal?: string }) {
     ERROR: 'err',
   }
   const kind = signal ? (map[signal] ?? '') : ''
-  return <Badge kind={kind as 'bull' | 'bear' | 'neutral' | 'err' | ''}>{signal ?? '—'}</Badge>
+  return (
+    <Badge kind={kind as 'bull' | 'bear' | 'neutral' | 'err' | ''}>{label ?? signal ?? '—'}</Badge>
+  )
 }
 
 // ─── Sparkline ────────────────────────────────────────────────────────────────

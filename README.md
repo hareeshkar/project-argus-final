@@ -26,6 +26,25 @@ npm run dev
 ```
 
 The frontend reads `VITE_ARGUS_API_BASE_URL`; default is `http://localhost:8000`.
+
+## Architecture Upgrades (optional)
+
+Redis tick store, Celery LLM offload, and persistent WebSocket ingest are available via `docker-compose.yml`. Defaults keep local dev simple (in-memory ticks, inline template narrative).
+
+```bash
+docker compose up -d redis              # shared tick store + Celery broker
+docker compose up -d celery-worker      # LLM narrative offload
+docker compose up -d ws-ingest          # persistent CSE WebSocket → Redis
+
+# Enable when stack is running (backend env):
+# ARGUS_REDIS_TICKS_ENABLED=true ARGUS_LLM_QUEUE_ENABLED=true ARGUS_WS_INGEST_ENABLED=true
+```
+
+Install new Python deps from `backend/`:
+
+```bash
+../../project-argus/venv/bin/pip install -r requirements.txt
+```
 # Project Argus Final Backend
 
 Project Argus Final is the cleaned backend target for a confidence-aware Colombo Stock Exchange analytics system.
@@ -74,11 +93,12 @@ When `demo_mode` is `false`, the response lineage should show:
 {
   "historical_source": "CSE_REST",
   "order_book_source": "CSE_REST_ORDERBOOK",
-  "live_source": "NOT_CONFIGURED"
+  "live_source": "CSE_REST_TRADE_SUMMARY",
+  "intraday_context_source": "CSE_REST_TRADE_SUMMARY"
 }
 ```
 
-`live_source` remains `NOT_CONFIGURED` for REST-only analysis because WebSocket ticks are a separate provider/ingestion layer. `CseRestMarketDataProvider` is intentionally REST-only; `WebSocketMarketDataProvider` owns `/topic/daytrade` ticks.
+`live_source` is `CSE_REST_TRADE_SUMMARY` for REST-only analysis (the microstructure proxy comes from `tradeSummary`). When the shared WebSocket tick store has live ticks for the symbol, `live_source` becomes `CSE_WEBSOCKET_DAYTRADE` and the intraday context layer prefers real ticks. `CseRestMarketDataProvider` is intentionally REST-only; `WebSocketMarketDataProvider` owns `/topic/daytrade` ticks. Order book + microstructure feed a separate intraday context layer (small ensemble nudge + quality flags), never ARIMA/VaR.
 
 ## Live Volume Enrichment
 

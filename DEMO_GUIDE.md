@@ -19,14 +19,14 @@ Argus ingests **public CSE data**, runs **statistical models** (ARIMA, EWMA VaR,
 | **Historical OHLCV** | `companyChartDataByStock` (period=5) | ~**240 daily** open/high/low/close/volume | Powers ARIMA, VaR, trend, chart gray line |
 | **Live prices** | `tradeSummary` | Last price, change, day volume, high/low | Polled every **1s** (market open) or **30s** (closed) via `/api/live-price` |
 | **Watchlist** | `tradeSummary` (all symbols) | Price + % change | Refreshed every **5s** |
-| **Order book** | `orderBook` | Total bids vs asks → pressure | Snapshot at analysis time; **not** a full depth book |
-| **WebSocket** | `/topic/daytrade` | Sparse trade ticks | Used in tests/snapshot only; **not** the main UI live path |
+| **Order book** | `orderBook` | Total bids vs asks → pressure | Single aggregate snapshot; feeds the intraday context nudge (low weight), not ARIMA |
+| **WebSocket** | `/topic/daytrade` | Sparse trade ticks | Live tick store; preferred for microstructure when populated (enable `ARGUS_WS_INGEST_ENABLED=true`) |
 
 **Market hours:** Mon–Fri **09:30–14:30** Sri Lanka Time (UTC+5:30).
 
 **When market is closed:** Live Price shows **last available tradeSummary** prices. Forecast still uses **last daily close** from the 240-row history.
 
-**Demo checkbox:** Forces **in-memory synthetic data** — leave **unchecked** for a real CSE demo.
+**Demo checkbox:** Forces **in-memory synthetic data** — leave **unchecked** for a real CSE demo. In demo mode the provider also synthesizes a coherent **intraday window** (tagged `DEMO_INTRADAY`) derived from the last daily bar, so Panel 14, the ensemble nudge, and the intraday quality flags are exercised offline without a live WebSocket. It is clearly labeled `DEMO (synthetic)` in the UI and never mixed into ARIMA/VaR.
 
 ---
 
@@ -277,6 +277,12 @@ A: **Confidence** = data + pipeline quality. **Forecast badges** = model predict
 **Q: Is this a trading bot?**  
 A: **No.** Research analytics only. Every panel states this.
 
+**Q: Do the order book and live ticks feed the forecast models?**  
+A: **No, by design.** ARIMA/VaR/trend run on ~240 **daily** bars only — a different time scale. Order book pressure and live microstructure live in a separate **intraday context layer** that produces a small, staleness-damped ensemble nudge (±0.20 max) plus confidence/quality flags. `math_results.indicator_vote` is the pure daily ensemble; the top-level `indicator_vote` is the daily + intraday combined view, and `intraday_context` documents the source, price divergence vs last close, VWAP deviation, and staleness.
+
+**Q: Where do live ticks come from for analysis?**  
+A: The shared tick store (`InMemoryTickStore` locally, `RedisTickStore` under Docker). When it has ticks for a symbol, analysis prefers them over the REST `tradeSummary` proxy and lineage shows `live_source: CSE_WEBSOCKET_DAYTRADE`. Otherwise it falls back to REST and labels it honestly.
+
 ---
 
 ## 9. Recent fixes (defense improvements)
@@ -285,3 +291,5 @@ A: **No.** Research analytics only. Every panel states this.
 - ✅ Live Price uses **REST tradeSummary** (1s poll), not misleading WebSocket tick counts
 - ✅ API returns `price_history` for auditable chart provenance
 - ✅ Lineage panel documents ~240-row CSE limit accurately
+- ✅ **Intraday context layer**: order book pressure + live microstructure kept on a separate time scale; small staleness-damped ensemble nudge (±0.20) + confidence/quality flags, never mixed into ARIMA/VaR
+- ✅ **Live tick preference**: analysis prefers the shared WebSocket tick store over the REST microstructure proxy when ticks are available, with honest source labelling in lineage

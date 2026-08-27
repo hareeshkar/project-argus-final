@@ -64,6 +64,8 @@ export const indicatorVoteSchema = z.object({
   confidence: z.number(),
   drivers: z.array(z.string()).default([]),
   components: keyedNumbersSchema.default({}),
+  daily_score: nullableNumber,
+  intraday_nudge: nullableNumber,
 })
 
 export const argusAnalysisSchema = z.object({
@@ -73,11 +75,14 @@ export const argusAnalysisSchema = z.object({
   timestamp: z.string(),
   processing_time: z.number(),
   data_source_mode: z.string(),
+  copy_mode: z.string().optional(),
   data_lineage: z.object({
     historical_source: z.string().optional(),
     live_source: z.string().optional(),
     order_book_source: z.string().optional(),
+    intraday_context_source: z.string().nullable().optional(),
     llm_provider: z.string().optional(),
+    copy_mode: z.string().optional(),
     historical_rows: nullableNumber,
     tick_rows: nullableNumber,
     last_historical_timestamp: z.union([z.string(), z.number()]).nullable().optional(),
@@ -108,6 +113,15 @@ export const argusAnalysisSchema = z.object({
         beats_naive: z.boolean().optional(),
         forecast_confidence: z.string().optional(),
         residual_white_noise_pvalue: nullableNumber,
+        oos_evaluation: z
+          .object({
+            holdout_size: z.number().optional(),
+            model_oos_rmse: z.number().optional(),
+            naive_flat_rmse: z.number().optional(),
+            naive_drift_rmse: z.number().optional(),
+            beats_naive_oos: z.boolean().optional(),
+          })
+          .optional(),
         error: nullableString,
       })
       .optional(),
@@ -202,6 +216,24 @@ export const argusAnalysisSchema = z.object({
       volume_estimated: z.boolean().optional(),
     })
     .optional(),
+  intraday_context: z
+    .object({
+      available: z.boolean().optional(),
+      source: z.string().nullable().optional(),
+      latest_price: nullableNumber,
+      last_daily_close: nullableNumber,
+      price_divergence_pct: nullableNumber,
+      vwap: nullableNumber,
+      vwap_deviation_pct: nullableNumber,
+      trade_intensity: nullableNumber,
+      tick_count: nullableNumber,
+      order_flow_pressure: nullableNumber,
+      is_stale: z.boolean().optional(),
+      staleness_seconds: nullableNumber,
+      last_update: z.union([z.string(), z.number()]).nullable().optional(),
+      warnings: z.array(z.string()).default([]),
+    })
+    .optional(),
   price_history: z
     .object({
       closes: z.array(z.number()).default([]),
@@ -224,6 +256,8 @@ export const argusAnalysisSchema = z.object({
     has_null_open_prices: z.boolean().optional(),
     used_open_price_proxy: z.boolean().optional(),
     is_stale: z.boolean().optional(),
+    order_book_snapshot: z.boolean().optional(),
+    intraday_context_available: z.boolean().optional(),
     low_liquidity_warning: z.boolean().optional(),
     api_latency_warning: z.boolean().optional(),
     model_warning: z.boolean().optional(),
@@ -246,3 +280,33 @@ export type Health = z.infer<typeof healthSchema>
 export type ArgusAnalysis = z.infer<typeof argusAnalysisSchema>
 export type LiveSnapshot = z.infer<typeof liveSnapshotSchema>
 export type PipelineStage = z.infer<typeof pipelineStageSchema>
+
+export const chatMessageSchema = z.object({
+  id: z.string(),
+  role: z.enum(['user', 'assistant']),
+  content: z.string(),
+  created_at: z.string(),
+  symbol: z.string().optional(),
+  provider: z.string().optional(),
+})
+
+export const chatResponseSchema = z.object({
+  reply: z.string(),
+  symbol: z.string(),
+  provider: z.string(),
+  rag_sources: z.array(z.string()).default([]),
+  disclaimer: z.string(),
+  analysis_refreshed: z.boolean(),
+  copy_mode: z.string().optional(),
+  analysis: argusAnalysisSchema.optional(),
+  rag_stats: z
+    .object({
+      char_count: z.number(),
+      section_count: z.number(),
+      sections: z.array(z.string()),
+    })
+    .optional(),
+})
+
+export type ChatMessage = z.infer<typeof chatMessageSchema>
+export type ChatResponse = z.infer<typeof chatResponseSchema>

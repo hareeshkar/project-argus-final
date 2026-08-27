@@ -24,7 +24,10 @@ describe('Project Argus Final app', () => {
     )
 
     expect(screen.getByText('PROJECT ARGUS')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /CHAT/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /METHODOLOGY/i })).toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: /Simple mode/i })).toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: /Experience mode/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /RUN/i })).toBeInTheDocument()
     expect(screen.getByText('Watchlist')).toBeInTheDocument()
     expect(screen.getAllByText(/not a buy\/sell tool/i).length).toBeGreaterThan(0)
@@ -45,6 +48,7 @@ describe('Project Argus Final app', () => {
     )
 
     expect(screen.getByRole('checkbox', { name: /demo/i })).not.toBeChecked()
+    expect(screen.getByRole('radio', { name: /Simple mode/i })).toHaveAttribute('aria-checked', 'true')
     expect(screen.getByText('Live CSE REST')).toBeInTheDocument()
   })
 

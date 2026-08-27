@@ -65,6 +65,59 @@ class TemplateNarrator:
         }
 
 
+class ExpertNarrator:
+    """Deterministic technical narrative for experience mode."""
+
+    model = "deterministic_expert_template"
+
+    def explain(self, symbol: str, analysis: Dict[str, Any]) -> Dict[str, Any]:
+        vote = analysis["indicator_vote"]
+        confidence = analysis["confidence"]
+        volatility = analysis["volatility"]
+        arima = analysis["arima"]
+        drawdown = analysis.get("drawdown", {})
+        regime = analysis.get("regime", {})
+
+        signal = vote.get("signal", "NEUTRAL")
+        label = confidence.get("label", "MODERATE")
+        risk_level = volatility.get("risk_level", "MODERATE")
+        short = symbol.split(".")[0]
+        model_used = arima.get("model_used", "fallback")
+        beats = arima.get("beats_naive", False)
+        fc_conf = arima.get("forecast_confidence", "LOW")
+        vol_pct = volatility.get("daily_volatility_pct", 0)
+        hist_var = volatility.get("historical_var_95_pct", 0)
+
+        risk_notes = [
+            f"Daily volatility (EWMA σ): {vol_pct:.2f}%; Historical VaR 95: {hist_var:.2f}%.",
+            f"Current drawdown: {drawdown.get('current_drawdown_pct', 0):.2f}% · max drawdown: {drawdown.get('max_drawdown_pct', 0):.2f}%.",
+        ]
+        if regime.get("liquidity_regime") == "THIN":
+            risk_notes.append("liquidity_regime=THIN — lower volume percentile.")
+        if not beats:
+            risk_notes.append(
+                f"ARIMA {model_used} FAILS NAIVE baseline; forecast_confidence={fc_conf}."
+            )
+        lb_p = arima.get("residual_white_noise_pvalue")
+        if lb_p is not None:
+            risk_notes.append(f"Ljung-Box residual white-noise p-value: {lb_p:.4f}.")
+
+        return {
+            "headline": f"{short}: {signal} · confidence {label} · risk {risk_level}",
+            "summary": (
+                f"{model_used} selected (order {arima.get('selected_order', 'n/a')}); "
+                f"beats_naive={beats}; forecast_confidence={fc_conf}. "
+                f"EWMA σ={vol_pct:.2f}%; ensemble signal={signal} @ score {vote.get('score', 0):.2f}."
+            ),
+            "risk_notes": risk_notes[:4],
+            "confidence_explanation": (
+                f"Confidence {label} ({confidence.get('score', 0):.2f}); "
+                f"penalties: {len(confidence.get('reasons', []))}."
+            ),
+            "disclaimer": "Research analytics only. Not investment advice.",
+        }
+
+
 def extract_json_from_llm(text: str) -> Dict[str, Any]:
     """Extract the first JSON object from model output, tolerating prose and truncation."""
     import re
@@ -144,8 +197,11 @@ def build_analysis_context(symbol: str, analysis: Dict[str, Any]) -> str:
         "",
         "=== Signal & confidence ===",
         f"Ensemble signal: {vote.get('signal', 'n/a')} (score {_safe_num(vote.get('score'))}, range -1 bearish to +1 bullish)",
-        f"Confidence: {confidence.get('label', 'n/a')} ({_safe_num(confidence.get('score'))})",
+        f"Confidence: {confidence.get('label', 'n/a')} ({_safe_num(confidence.get('score'))} out of 1)",
         f"Confidence reasons: {'; '.join(confidence.get('reasons') or []) or 'none'}",
+        f"Confidence penalties (each reduces score): {confidence.get('penalties') or {}}",
+        f"Vote drivers: {'; '.join(vote.get('drivers') or []) or 'none'}",
+        f"Vote confidence weight: {_safe_num(vote.get('confidence'))}",
         f"Vote components — trend: {_safe_num(components.get('trend_score'))}, "
         f"volatility: {_safe_num(components.get('volatility_score'))}, "
         f"liquidity: {_safe_num(components.get('liquidity_score'))}, "
@@ -153,20 +209,29 @@ def build_analysis_context(symbol: str, analysis: Dict[str, Any]) -> str:
         "",
         "=== ARIMA forecast ===",
         f"Model: {arima.get('model_used', 'n/a')} order {arima.get('selected_order', 'n/a')}",
+        f"Candidate models: {arima.get('candidate_models', [])}",
+        f"AIC: {_safe_num(arima.get('aic'))}, AICc: {_safe_num(arima.get('aicc'))}, BIC: {_safe_num(arima.get('bic'))}",
         f"Forecast trend label: {arima.get('trend', 'n/a')}",
         f"Beats naive baseline: {arima.get('beats_naive', 'n/a')}",
         f"Forecast confidence: {arima.get('forecast_confidence', 'n/a')}",
+        f"Residual white-noise p-value: {_safe_num(arima.get('residual_white_noise_pvalue'))}",
         f"3-day forecast (LKR): {forecast}",
         f"95% CI lower: {ci.get('lower', [])}",
         f"95% CI upper: {ci.get('upper', [])}",
         "",
         "=== Risk & volatility ===",
-        f"Daily volatility (EWMA): {_safe_num(volatility.get('daily_volatility_pct'))}%",
+        f"Daily volatility (EWMA σ): {_safe_num(volatility.get('daily_volatility_pct'))}%",
+        f"EWMA lambda: {_safe_num(volatility.get('ewma_lambda'))}",
         f"Risk level: {volatility.get('risk_level', 'n/a')}",
-        f"VaR 95 (EWMA): {_safe_num(volatility.get('var_95_pct'))}%",
-        f"Historical VaR 95: {_safe_num(volatility.get('historical_var_95_pct'))}%",
+        f"EWMA VaR 95 / Bad Day Loss (95%) [var_95_pct]: {_safe_num(volatility.get('var_95_pct'))}%",
+        f"Historical VaR 95 / Worst Day (95%) [historical_var_95_pct]: {_safe_num(volatility.get('historical_var_95_pct'))}%",
+        f"Historical VaR 99 / Very Bad Day (99%) [historical_var_99_pct]: {_safe_num(volatility.get('historical_var_99_pct'))}%",
+        f"Parkinson volatility: {_safe_num(volatility.get('parkinson_volatility_pct'))}%",
+        f"Volatility percentile (symbol-relative): {_safe_num(volatility.get('volatility_percentile'))}",
+        f"Flat high-low ratio: {_safe_num(volatility.get('flat_high_low_ratio'))}",
         f"Max drawdown: {_safe_num(drawdown.get('max_drawdown_pct'))}%",
         f"Current drawdown: {_safe_num(drawdown.get('current_drawdown_pct'))}%",
+        f"Drawdown duration (days): {drawdown.get('drawdown_duration_days', 'n/a')}",
         "",
         "=== Trend & regime ===",
         f"Linear trend: {trend.get('trend_direction', 'n/a')} (R² {_safe_num(trend.get('r_squared'))})",
@@ -176,8 +241,11 @@ def build_analysis_context(symbol: str, analysis: Dict[str, Any]) -> str:
         "",
         "=== Anomaly flags ===",
         f"Anomalous: {anomaly.get('is_anomalous', False)}",
-        f"Return z-score: {_safe_num(anomaly.get('return_zscore'))}",
-        f"Volume z-score: {_safe_num(anomaly.get('volume_zscore'))}",
+        f"Return anomaly: {anomaly.get('return_anomaly', False)}, price anomaly: {anomaly.get('price_anomaly', False)}, volume anomaly: {anomaly.get('volume_anomaly', False)}",
+        f"Return z-score: {_safe_num(anomaly.get('return_zscore'))}, modified return z-score: {_safe_num(anomaly.get('modified_return_zscore'))}",
+        f"Price z-score: {_safe_num(anomaly.get('price_zscore'))}, modified price z-score: {_safe_num(anomaly.get('modified_price_zscore'))}",
+        f"Volume z-score: {_safe_num(anomaly.get('volume_zscore'))}, modified volume z-score: {_safe_num(anomaly.get('modified_volume_zscore'))}",
+        f"Lookback days: {anomaly.get('lookback_days', 'n/a')}",
         "",
         "Constraints: CSE public REST history is ~120–240 daily bars. This is research analytics only — not investment advice.",
     ]
@@ -203,45 +271,64 @@ class OpenAICompatibleNarrator:
         self._extra_headers = extra_headers or {}
         self._fallback = TemplateNarrator()
 
-    def explain(self, symbol: str, analysis: Dict[str, Any]) -> Dict[str, Any]:
-        try:
-            return self._call(symbol, analysis)
-        except Exception as exc:
-            logger.warning("%s call failed (%s), falling back to template", self.model, exc)
-            return self._fallback.explain(symbol, analysis)
+    def explain(self, symbol: str, analysis: Dict[str, Any], copy_mode: str = "simple") -> Dict[str, Any]:
+        return self._call(symbol, analysis, copy_mode=copy_mode)
 
-    def _call(self, symbol: str, analysis: Dict[str, Any]) -> Dict[str, Any]:
+    def _call(self, symbol: str, analysis: Dict[str, Any], copy_mode: str = "simple") -> Dict[str, Any]:
         context = build_analysis_context(symbol, analysis)
+        experience = copy_mode == "experience"
 
-        system_prompt = (
-            "You are Argus, explaining Colombo Stock Exchange stock analytics to a regular investor — "
-            "not a quant or data scientist.\n\n"
-            "WRITING RULES:\n"
-            "- Use short, everyday sentences. Avoid jargon.\n"
-            "- Do NOT use these words unless you immediately explain them in plain English: "
-            "ARIMA, VaR, EWMA, z-score, ensemble, baseline, residual, parametric.\n"
-            "- Translate signals: BULLISH = data tilts positive, BEARISH = data tilts negative, "
-            "NEUTRAL = mixed / no clear direction.\n"
-            "- Translate confidence: HIGH = trustworthy data, MODERATE = usable with caveats, "
-            "LOW = treat cautiously.\n"
-            "- Mention specific numbers from the evidence (prices, %, drawdown) when helpful.\n"
-            "- Be balanced — include one positive and one cautionary point when both exist.\n"
-            "- Never say buy, sell, hold, or recommend any action.\n"
-            "- Use the stock short code (e.g. COMB) not the full symbol."
-        )
-
-        user_prompt = (
-            f"{context}\n\n"
-            "Write a friendly research summary from the evidence above.\n"
-            "Reply with ONLY valid JSON (no markdown, no text outside JSON):\n"
-            "{\n"
-            '  "headline": "6-12 word plain-English headline (e.g. COMB: mixed signals, trust is high)",\n'
-            '  "summary": "Exactly 2 short sentences. First: overall lean and why. Second: key risk or caveat.",\n'
-            '  "risk_notes": ["2-3 bullets, max 15 words each, plain language only"],\n'
-            '  "confidence_explanation": "One sentence a non-expert understands — why trust is high/moderate/low",\n'
-            '  "disclaimer": "Research analytics only. Not investment advice."\n'
-            "}"
-        )
+        if experience:
+            system_prompt = (
+                "You are Argus, a quantitative CSE research analyst.\n\n"
+                "WRITING RULES:\n"
+                "- Use precise finance terminology: ARIMA, EWMA VaR, Historical VaR, Parkinson, drawdown, regime.\n"
+                "- Reference model outputs directly (model_used, beats_naive, forecast_confidence, risk_level).\n"
+                "- Keep signal enums as BULLISH/BEARISH/NEUTRAL and confidence as HIGH/MODERATE/LOW.\n"
+                "- Never say buy, sell, hold, or recommend any action.\n"
+                "- Use the stock short code (e.g. COMB) not the full symbol."
+            )
+            user_prompt = (
+                f"{context}\n\n"
+                "Write a concise technical research summary from the evidence above.\n"
+                "Reply with ONLY valid JSON (no markdown, no text outside JSON):\n"
+                "{\n"
+                '  "headline": "Technical headline with signal, confidence, risk_level",\n'
+                '  "summary": "2 sentences with ARIMA order, beats_naive, EWMA σ, VaR metrics.",\n'
+                '  "risk_notes": ["2-4 bullets with technical metrics and regime flags"],\n'
+                '  "confidence_explanation": "One sentence citing confidence label, score, penalty count",\n'
+                '  "disclaimer": "Research analytics only. Not investment advice."\n'
+                "}"
+            )
+        else:
+            system_prompt = (
+                "You are Argus, explaining Colombo Stock Exchange stock analytics to a regular investor — "
+                "not a quant or data scientist.\n\n"
+                "WRITING RULES:\n"
+                "- Use short, everyday sentences. Avoid jargon.\n"
+                "- Do NOT use these words unless you immediately explain them in plain English: "
+                "ARIMA, VaR, EWMA, z-score, ensemble, baseline, residual, parametric.\n"
+                "- Translate signals: BULLISH = data tilts positive, BEARISH = data tilts negative, "
+                "NEUTRAL = mixed / no clear direction.\n"
+                "- Translate confidence: HIGH = trustworthy data, MODERATE = usable with caveats, "
+                "LOW = treat cautiously.\n"
+                "- Mention specific numbers from the evidence (prices, %, drawdown) when helpful.\n"
+                "- Be balanced — include one positive and one cautionary point when both exist.\n"
+                "- Never say buy, sell, hold, or recommend any action.\n"
+                "- Use the stock short code (e.g. COMB) not the full symbol."
+            )
+            user_prompt = (
+                f"{context}\n\n"
+                "Write a friendly research summary from the evidence above.\n"
+                "Reply with ONLY valid JSON (no markdown, no text outside JSON):\n"
+                "{\n"
+                '  "headline": "6-12 word plain-English headline (e.g. COMB: mixed signals, trust is high)",\n'
+                '  "summary": "Exactly 2 short sentences. First: overall lean and why. Second: key risk or caveat.",\n'
+                '  "risk_notes": ["2-3 bullets, max 15 words each, plain language only"],\n'
+                '  "confidence_explanation": "One sentence a non-expert understands — why trust is high/moderate/low",\n'
+                '  "disclaimer": "Research analytics only. Not investment advice."\n'
+                "}"
+            )
 
         kwargs: Dict[str, Any] = {
             "model": self.model,
