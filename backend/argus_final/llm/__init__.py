@@ -1,5 +1,23 @@
 """Narrative providers."""
 
-from .adapter import DeepSeekNarrator, ExpertNarrator, LLMNarrator, OpenRouterNarrator, TemplateNarrator
+from .adapter import (
+    ChainNarrator,
+    DeepSeekNarrator,
+    ExpertNarrator,
+    GeminiNarrator,
+    LLMNarrator,
+    OllamaNarrator,
+    OpenRouterNarrator,
+    TemplateNarrator,
+)
 
-__all__ = ["LLMNarrator", "DeepSeekNarrator", "OpenRouterNarrator", "TemplateNarrator", "ExpertNarrator"]
+__all__ = [
+    "LLMNarrator",
+    "DeepSeekNarrator",
+    "OpenRouterNarrator",
+    "GeminiNarrator",
+    "OllamaNarrator",
+    "ChainNarrator",
+    "TemplateNarrator",
+    "ExpertNarrator",
+]

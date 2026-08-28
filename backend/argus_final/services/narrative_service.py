@@ -6,7 +6,15 @@ from typing import Any, Dict, Tuple
 
 from argus_final.copy import CopyMode, normalize_copy_mode
 from argus_final.core.settings import Settings
-from argus_final.llm import DeepSeekNarrator, ExpertNarrator, OpenRouterNarrator, TemplateNarrator
+from argus_final.llm import (
+    ChainNarrator,
+    DeepSeekNarrator,
+    ExpertNarrator,
+    GeminiNarrator,
+    OllamaNarrator,
+    OpenRouterNarrator,
+    TemplateNarrator,
+)
 
 
 def should_use_celery(settings: Settings, narrator) -> bool:
@@ -22,7 +30,7 @@ def template_narrator_for_mode(copy_mode: CopyMode):
 
 
 def _explain_with_mode(narrator, symbol: str, analysis: Dict[str, Any], copy_mode: CopyMode):
-    if isinstance(narrator, (DeepSeekNarrator, OpenRouterNarrator)):
+    if isinstance(narrator, (ChainNarrator, OllamaNarrator, GeminiNarrator, DeepSeekNarrator, OpenRouterNarrator)):
         return narrator.explain(symbol, analysis, copy_mode=copy_mode)
     if isinstance(narrator, TemplateNarrator):
         return template_narrator_for_mode(copy_mode).explain(symbol, analysis)

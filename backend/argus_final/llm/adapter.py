@@ -252,6 +252,64 @@ def build_analysis_context(symbol: str, analysis: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def build_narration_prompts(symbol: str, analysis: Dict[str, Any], copy_mode: str):
+    """Shared narration prompt pair used by every provider translator."""
+    context = build_analysis_context(symbol, analysis)
+
+    if copy_mode == "experience":
+        system_prompt = (
+            "You are Argus, a quantitative CSE research analyst.\n\n"
+            "WRITING RULES:\n"
+            "- Use precise finance terminology: ARIMA, EWMA VaR, Historical VaR, Parkinson, drawdown, regime.\n"
+            "- Reference model outputs directly (model_used, beats_naive, forecast_confidence, risk_level).\n"
+            "- Keep signal enums as BULLISH/BEARISH/NEUTRAL and confidence as HIGH/MODERATE/LOW.\n"
+            "- Never say buy, sell, hold, or recommend any action.\n"
+            "- Use the stock short code (e.g. COMB) not the full symbol."
+        )
+        user_prompt = (
+            f"{context}\n\n"
+            "Write a concise technical research summary from the evidence above.\n"
+            "Reply with ONLY valid JSON (no markdown, no text outside JSON):\n"
+            "{\n"
+            '  "headline": "Technical headline with signal, confidence, risk_level",\n'
+            '  "summary": "2 sentences with ARIMA order, beats_naive, EWMA σ, VaR metrics.",\n'
+            '  "risk_notes": ["2-4 bullets with technical metrics and regime flags"],\n'
+            '  "confidence_explanation": "One sentence citing confidence label, score, penalty count",\n'
+            '  "disclaimer": "Research analytics only. Not investment advice."\n'
+            "}"
+        )
+    else:
+        system_prompt = (
+            "You are Argus, explaining Colombo Stock Exchange stock analytics to a regular investor — "
+            "not a quant or data scientist.\n\n"
+            "WRITING RULES:\n"
+            "- Use short, everyday sentences. Avoid jargon.\n"
+            "- Do NOT use these words unless you immediately explain them in plain English: "
+            "ARIMA, VaR, EWMA, z-score, ensemble, baseline, residual, parametric.\n"
+            "- Translate signals: BULLISH = data tilts positive, BEARISH = data tilts negative, "
+            "NEUTRAL = mixed / no clear direction.\n"
+            "- Translate confidence: HIGH = trustworthy data, MODERATE = usable with caveats, "
+            "LOW = treat cautiously.\n"
+            "- Mention specific numbers from the evidence (prices, %, drawdown) when helpful.\n"
+            "- Be balanced — include one positive and one cautionary point when both exist.\n"
+            "- Never say buy, sell, hold, or recommend any action.\n"
+            "- Use the stock short code (e.g. COMB) not the full symbol."
+        )
+        user_prompt = (
+            f"{context}\n\n"
+            "Write a friendly research summary from the evidence above.\n"
+            "Reply with ONLY valid JSON (no markdown, no text outside JSON):\n"
+            "{\n"
+            '  "headline": "6-12 word plain-English headline (e.g. COMB: mixed signals, trust is high)",\n'
+            '  "summary": "Exactly 2 short sentences. First: overall lean and why. Second: key risk or caveat.",\n'
+            '  "risk_notes": ["2-3 bullets, max 15 words each, plain language only"],\n'
+            '  "confidence_explanation": "One sentence a non-expert understands — why trust is high/moderate/low",\n'
+            '  "disclaimer": "Research analytics only. Not investment advice."\n'
+            "}"
+        )
+    return system_prompt, user_prompt
+
+
 class OpenAICompatibleNarrator:
     """Shared OpenAI-format chat narrator for DeepSeek, OpenRouter, etc."""
 
@@ -274,61 +332,20 @@ class OpenAICompatibleNarrator:
     def explain(self, symbol: str, analysis: Dict[str, Any], copy_mode: str = "simple") -> Dict[str, Any]:
         return self._call(symbol, analysis, copy_mode=copy_mode)
 
-    def _call(self, symbol: str, analysis: Dict[str, Any], copy_mode: str = "simple") -> Dict[str, Any]:
-        context = build_analysis_context(symbol, analysis)
-        experience = copy_mode == "experience"
+    def complete_chat(self, messages, max_tokens: int = 800, temperature: float = 0.3) -> str:
+        kwargs: Dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
+        if self._extra_headers:
+            kwargs["extra_headers"] = self._extra_headers
+        completion = self._client.chat.completions.create(**kwargs)
+        return (completion.choices[0].message.content or "").strip()
 
-        if experience:
-            system_prompt = (
-                "You are Argus, a quantitative CSE research analyst.\n\n"
-                "WRITING RULES:\n"
-                "- Use precise finance terminology: ARIMA, EWMA VaR, Historical VaR, Parkinson, drawdown, regime.\n"
-                "- Reference model outputs directly (model_used, beats_naive, forecast_confidence, risk_level).\n"
-                "- Keep signal enums as BULLISH/BEARISH/NEUTRAL and confidence as HIGH/MODERATE/LOW.\n"
-                "- Never say buy, sell, hold, or recommend any action.\n"
-                "- Use the stock short code (e.g. COMB) not the full symbol."
-            )
-            user_prompt = (
-                f"{context}\n\n"
-                "Write a concise technical research summary from the evidence above.\n"
-                "Reply with ONLY valid JSON (no markdown, no text outside JSON):\n"
-                "{\n"
-                '  "headline": "Technical headline with signal, confidence, risk_level",\n'
-                '  "summary": "2 sentences with ARIMA order, beats_naive, EWMA σ, VaR metrics.",\n'
-                '  "risk_notes": ["2-4 bullets with technical metrics and regime flags"],\n'
-                '  "confidence_explanation": "One sentence citing confidence label, score, penalty count",\n'
-                '  "disclaimer": "Research analytics only. Not investment advice."\n'
-                "}"
-            )
-        else:
-            system_prompt = (
-                "You are Argus, explaining Colombo Stock Exchange stock analytics to a regular investor — "
-                "not a quant or data scientist.\n\n"
-                "WRITING RULES:\n"
-                "- Use short, everyday sentences. Avoid jargon.\n"
-                "- Do NOT use these words unless you immediately explain them in plain English: "
-                "ARIMA, VaR, EWMA, z-score, ensemble, baseline, residual, parametric.\n"
-                "- Translate signals: BULLISH = data tilts positive, BEARISH = data tilts negative, "
-                "NEUTRAL = mixed / no clear direction.\n"
-                "- Translate confidence: HIGH = trustworthy data, MODERATE = usable with caveats, "
-                "LOW = treat cautiously.\n"
-                "- Mention specific numbers from the evidence (prices, %, drawdown) when helpful.\n"
-                "- Be balanced — include one positive and one cautionary point when both exist.\n"
-                "- Never say buy, sell, hold, or recommend any action.\n"
-                "- Use the stock short code (e.g. COMB) not the full symbol."
-            )
-            user_prompt = (
-                f"{context}\n\n"
-                "Write a friendly research summary from the evidence above.\n"
-                "Reply with ONLY valid JSON (no markdown, no text outside JSON):\n"
-                "{\n"
-                '  "headline": "6-12 word plain-English headline (e.g. COMB: mixed signals, trust is high)",\n'
-                '  "summary": "Exactly 2 short sentences. First: overall lean and why. Second: key risk or caveat.",\n'
-                '  "risk_notes": ["2-3 bullets, max 15 words each, plain language only"],\n'
-                '  "confidence_explanation": "One sentence a non-expert understands — why trust is high/moderate/low",\n'
-                '  "disclaimer": "Research analytics only. Not investment advice."\n'
-                "}"
-            )
+    def _call(self, symbol: str, analysis: Dict[str, Any], copy_mode: str = "simple") -> Dict[str, Any]:
+        system_prompt, user_prompt = build_narration_prompts(symbol, analysis, copy_mode)
 
         kwargs: Dict[str, Any] = {
             "model": self.model,
@@ -357,12 +374,16 @@ class OpenAICompatibleNarrator:
 class DeepSeekNarrator(OpenAICompatibleNarrator):
     """LLM narrative via DeepSeek API (OpenAI-compatible). Default model: deepseek-v4-flash."""
 
+    provider_name = "deepseek"
+
     def __init__(self, api_key: str, model: str = "deepseek-v4-flash"):
         super().__init__(api_key=api_key, model=model, base_url="https://api.deepseek.com")
 
 
 class OpenRouterNarrator(OpenAICompatibleNarrator):
     """LLM narrative via OpenRouter API using the OpenAI-compatible SDK."""
+
+    provider_name = "openrouter"
 
     def __init__(self, api_key: str, model: str = "openrouter/free"):
         super().__init__(
@@ -374,3 +395,223 @@ class OpenRouterNarrator(OpenAICompatibleNarrator):
                 "X-Title": "Project Argus CSE Analytics",
             },
         )
+
+
+class OllamaNarrator:
+    """Local LLM narrator (Gemma family) via the Ollama native chat API.
+
+    First link in the fallback chain: when Ollama is not running the request
+    fails fast on connection and the chain moves to the next provider.
+    """
+
+    provider_name = "ollama"
+
+    def __init__(
+        self,
+        base_url: str = "http://localhost:11434",
+        model: str = "gemma4",
+        timeout: float = 6.0,
+        transport: Optional[Any] = None,
+    ):
+        self.model = model
+        self.base_url = base_url.rstrip("/")
+        self._timeout = timeout
+        self._transport = transport
+
+    def _post(self, path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        import httpx
+
+        with httpx.Client(timeout=self._timeout, transport=self._transport) as client:
+            resp = client.post(f"{self.base_url}{path}", json=payload)
+            resp.raise_for_status()
+            return resp.json()
+
+    def explain(self, symbol: str, analysis: Dict[str, Any], copy_mode: str = "simple") -> Dict[str, Any]:
+        system_prompt, user_prompt = build_narration_prompts(symbol, analysis, copy_mode)
+        content = self.complete_chat(
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            max_tokens=900,
+            temperature=0.25,
+        )
+        return self._parse_explanation(content)
+
+    def complete_chat(self, messages, max_tokens: int = 800, temperature: float = 0.3) -> str:
+        data = self._post(
+            "/api/chat",
+            {
+                "model": self.model,
+                "messages": messages,
+                "stream": False,
+                "format": "json",
+                "options": {"temperature": temperature, "num_predict": max_tokens},
+            },
+        )
+        return ((data.get("message") or {}).get("content") or "").strip()
+
+    @staticmethod
+    def _parse_explanation(content: str) -> Dict[str, Any]:
+        parsed = extract_json_from_llm(content)
+        return {
+            "headline": parsed.get("headline", ""),
+            "summary": parsed.get("summary", ""),
+            "risk_notes": parsed.get("risk_notes", []),
+            "confidence_explanation": parsed.get("confidence_explanation", ""),
+            "disclaimer": parsed.get("disclaimer", "Research analytics only. Not investment advice."),
+        }
+
+
+class GeminiNarrator:
+    """LLM narrator via the native Google Gemini generateContent API.
+
+    Translates the internal OpenAI-style semantic call into Gemini wire format:
+    system message -> systemInstruction.parts, assistant role -> "model",
+    max_tokens -> maxOutputTokens, JSON mode -> responseMimeType.
+    """
+
+    provider_name = "gemini"
+
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "gemini-3.5-flash-lite",
+        timeout: float = 30.0,
+        base_url: str = "https://generativelanguage.googleapis.com/v1beta",
+        transport: Optional[Any] = None,
+    ):
+        self.api_key = api_key
+        self.model = model
+        self.base_url = base_url.rstrip("/")
+        self._timeout = timeout
+        self._transport = transport
+
+    def _generate(
+        self,
+        system_instruction: str,
+        turns,
+        max_tokens: int,
+        temperature: float,
+        json_mode: bool = False,
+    ) -> str:
+        import httpx
+
+        contents = []
+        for role, content in turns:
+            gemini_role = "model" if role == "assistant" else "user"
+            contents.append({"role": gemini_role, "parts": [{"text": content}]})
+
+        generation_config: Dict[str, Any] = {
+            "temperature": temperature,
+            "maxOutputTokens": max_tokens,
+        }
+        if json_mode:
+            generation_config["responseMimeType"] = "application/json"
+
+        body: Dict[str, Any] = {"contents": contents, "generationConfig": generation_config}
+        if system_instruction:
+            body["systemInstruction"] = {"parts": [{"text": system_instruction}]}
+
+        url = f"{self.base_url}/models/{self.model}:generateContent"
+        with httpx.Client(timeout=self._timeout, transport=self._transport) as client:
+            resp = client.post(url, json=body, headers={"x-goog-api-key": self.api_key})
+
+        try:
+            data = resp.json()
+        except ValueError:
+            raise RuntimeError(f"gemini non-JSON response (http {resp.status_code})")
+
+        if resp.status_code >= 400 or "error" in data:
+            err = data.get("error", {})
+            raise RuntimeError(
+                f"gemini api error {err.get('code', resp.status_code)} {err.get('status', '')}: "
+                f"{err.get('message', str(data)[:200])}"
+            )
+        if data.get("promptFeedback", {}).get("blockReason"):
+            raise RuntimeError(f"gemini blocked prompt: {data['promptFeedback']['blockReason']}")
+
+        candidates = data.get("candidates") or []
+        if not candidates:
+            raise RuntimeError("gemini returned no candidates")
+        parts = (candidates[0].get("content") or {}).get("parts") or []
+        text = "".join(p.get("text", "") for p in parts)
+        if not text:
+            raise RuntimeError(
+                f"gemini empty response (finishReason={candidates[0].get('finishReason')})"
+            )
+        return text
+
+    def explain(self, symbol: str, analysis: Dict[str, Any], copy_mode: str = "simple") -> Dict[str, Any]:
+        system_prompt, user_prompt = build_narration_prompts(symbol, analysis, copy_mode)
+        text = self._generate(
+            system_prompt,
+            [("user", user_prompt)],
+            max_tokens=900,
+            temperature=0.25,
+            json_mode=True,
+        )
+        parsed = extract_json_from_llm(text)
+        return {
+            "headline": parsed.get("headline", ""),
+            "summary": parsed.get("summary", ""),
+            "risk_notes": parsed.get("risk_notes", []),
+            "confidence_explanation": parsed.get("confidence_explanation", ""),
+            "disclaimer": parsed.get("disclaimer", "Research analytics only. Not investment advice."),
+        }
+
+    def complete_chat(self, messages, max_tokens: int = 800, temperature: float = 0.3) -> str:
+        system_instruction = ""
+        turns = []
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            if not content:
+                continue
+            if role == "system":
+                system_instruction = content
+                continue
+            turns.append((role, content))
+        return self._generate(
+            system_instruction, turns, max_tokens=max_tokens, temperature=temperature, json_mode=False
+        ).strip()
+
+
+class ChainNarrator:
+    """Fallback chain over several narrators: tries each provider in order.
+
+    Records the provider that actually answered so lineage stays honest.
+    """
+
+    def __init__(self, narrators):
+        if not narrators:
+            raise ValueError("ChainNarrator requires at least one narrator")
+        self._chain = list(narrators)
+        self.model = self._chain[0].model
+        self.last_provider = None
+
+    def explain(self, symbol: str, analysis: Dict[str, Any], copy_mode: str = "simple") -> Dict[str, Any]:
+        errors = []
+        for narrator in self._chain:
+            try:
+                explanation = narrator.explain(symbol, analysis, copy_mode=copy_mode)
+                self.model = getattr(narrator, "model", self.model)
+                self.last_provider = getattr(narrator, "provider_name", narrator.model)
+                return explanation
+            except Exception as exc:
+                errors.append(f"{getattr(narrator, 'provider_name', narrator.model)}: {exc}")
+                logger.warning("narrator chain fallback: %s", errors[-1])
+        raise RuntimeError("all narrators failed: " + " | ".join(errors))
+
+    def complete_chat(self, messages, max_tokens: int = 800, temperature: float = 0.3) -> str:
+        errors = []
+        for narrator in self._chain:
+            try:
+                reply = narrator.complete_chat(messages, max_tokens=max_tokens, temperature=temperature)
+                self.model = getattr(narrator, "model", self.model)
+                self.last_provider = getattr(narrator, "provider_name", narrator.model)
+                return reply
+            except Exception as exc:
+                errors.append(f"{getattr(narrator, 'provider_name', narrator.model)}: {exc}")
+                logger.warning("chat chain fallback: %s", errors[-1])
+        raise RuntimeError("all chat providers failed: " + " | ".join(errors))

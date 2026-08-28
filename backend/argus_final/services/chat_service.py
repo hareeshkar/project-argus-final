@@ -190,16 +190,34 @@ def build_rag_context(symbol: str, payload: Dict[str, Any], copy_mode: str = "si
 
 
 def _build_chat_client(settings: Settings):
+    from argus_final.llm import ChainNarrator, GeminiNarrator, OllamaNarrator
+
+    chain = []
+    if settings.ollama_enabled:
+        chain.append(
+            OllamaNarrator(
+                base_url=settings.ollama_base_url,
+                model=settings.ollama_model,
+                timeout=settings.ollama_timeout,
+            )
+        )
+    if settings.gemini_api_key:
+        chain.append(GeminiNarrator(api_key=settings.gemini_api_key, model=settings.gemini_model))
     deepseek_key = settings.deepseek_api_key
     if deepseek_key and deepseek_key != "REPLACE_WITH_DEEPSEEK_API_KEY":
-        return DeepSeekNarrator(api_key=deepseek_key, model=settings.deepseek_model), settings.deepseek_model
+        chain.append(DeepSeekNarrator(api_key=deepseek_key, model=settings.deepseek_model))
     key = settings.openrouter_api_key
     if key and key != "REPLACE_WITH_OPENROUTER_API_KEY":
         model = settings.openrouter_model
         if model in ("openrouter/auto", ""):
             model = "openrouter/free"
-        return OpenRouterNarrator(api_key=key, model=model), model
-    return None, "deterministic_template"
+        chain.append(OpenRouterNarrator(api_key=key, model=model))
+
+    if not chain:
+        return None, "deterministic_template"
+    if len(chain) == 1:
+        return chain[0], chain[0].model
+    return ChainNarrator(chain), chain[0].model
 
 
 def _chat_system_prompt(copy_mode: str, payload: Optional[Dict[str, Any]] = None) -> str:
@@ -445,6 +463,8 @@ class ChatService:
         messages.append({"role": "user", "content": message})
 
         def _call():
+            if hasattr(narrator, "complete_chat"):
+                return narrator.complete_chat(messages, max_tokens=800, temperature=0.3)
             kwargs: Dict[str, Any] = {
                 "model": narrator.model,
                 "messages": messages,

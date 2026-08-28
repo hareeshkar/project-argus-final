@@ -41,6 +41,12 @@ class Settings:
     deepseek_model: str = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
     openrouter_api_key: str = os.getenv("OPENROUTER_API_KEY", "REPLACE_WITH_OPENROUTER_API_KEY")
     openrouter_model: str = os.getenv("OPENROUTER_MODEL", "openrouter/auto")
+    gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
+    gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
+    ollama_enabled: bool = _env_bool("ARGUS_OLLAMA_ENABLED", True)
+    ollama_base_url: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+    ollama_model: str = os.getenv("OLLAMA_MODEL", "gemma4")
+    ollama_timeout: float = float(os.getenv("ARGUS_OLLAMA_TIMEOUT", "6"))
     cors_origins: str = os.getenv(
         "ARGUS_CORS_ORIGINS",
         "http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000",
