@@ -89,18 +89,21 @@ class AnalysisService:
         query: str,
         demo_mode: Optional[bool] = None,
         copy_mode: Optional[str] = "simple",
+        scenarios: Optional[list] = None,
     ) -> Dict[str, Any]:
         try:
             asyncio.get_running_loop()
         except RuntimeError:
-            return asyncio.run(self.analyze_async(query, demo_mode=demo_mode, copy_mode=copy_mode))
+            return asyncio.run(
+                self.analyze_async(query, demo_mode=demo_mode, copy_mode=copy_mode, scenarios=scenarios)
+            )
 
         import concurrent.futures
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
             return executor.submit(
                 lambda: asyncio.run(
-                    self.analyze_async(query, demo_mode=demo_mode, copy_mode=copy_mode)
+                    self.analyze_async(query, demo_mode=demo_mode, copy_mode=copy_mode, scenarios=scenarios)
                 )
             ).result()
 
@@ -109,12 +112,14 @@ class AnalysisService:
         query: str,
         demo_mode: Optional[bool] = None,
         copy_mode: Optional[str] = "simple",
+        scenarios: Optional[list] = None,
     ) -> Dict[str, Any]:
         final_payload = None
         async for event in self.iter_analysis_events(
             query,
             demo_mode=demo_mode,
             copy_mode=copy_mode,
+            scenarios=scenarios,
         ):
             if event["event"] == "final":
                 final_payload = event["data"]
@@ -122,12 +127,76 @@ class AnalysisService:
             raise RuntimeError("analysis pipeline ended without a final payload")
         return final_payload
 
+    SCENARIOS = ("pump", "crash", "volstorm", "liquidity", "ramp", "stale")
+
+    @staticmethod
+    def _apply_scenarios(df, scenarios):
+        """Financial stress scenarios injected into the fetched OHLCV frame.
+
+        Each scenario stresses a different set of guard rails:
+          pump       +15% single-day close on 6x volume   -> anomaly + price divergence rails
+          crash      -15% single-day close on 6x volume   -> downside anomaly, drawdown, VaR rails
+          volstorm   four alternating +/-6% days, 2x vol  -> EWMA volatility and regime rails
+          liquidity  volume /8 with squeezed ranges       -> thin liquidity and volume-z rails
+          ramp       +8% per day over three sessions      -> volatility/regime rails, not point anomalies
+          stale      last three closes frozen flat        -> flat-high-low and weak-signal rails
+        """
+        df = df.copy()
+        n = len(df)
+        if not n:
+            return df
+        close_col, volume_col = df.columns.get_loc("close"), df.columns.get_loc("volume")
+        if "open" in df.columns:
+            open_col = df.columns.get_loc("open")
+        else:
+            open_col = None
+        if "high" in df.columns:
+            high_col = df.columns.get_loc("high")
+        else:
+            high_col = None
+        if "low" in df.columns:
+            low_col = df.columns.get_loc("low")
+        else:
+            low_col = None
+        for scenario in scenarios:
+            if scenario == "pump":
+                df.iloc[-1, close_col] *= 1.15
+                df.iloc[-1, volume_col] *= 6
+            elif scenario == "crash":
+                df.iloc[-1, close_col] *= 0.85
+                df.iloc[-1, volume_col] *= 6
+            elif scenario == "volstorm":
+                for k in range(1, 5):
+                    factor = 1.06 if k % 2 == 0 else 0.94
+                    df.iloc[-k, close_col] *= factor
+                    df.iloc[-k, volume_col] *= 2
+            elif scenario == "liquidity":
+                for k in range(1, 6):
+                    df.iloc[-k, volume_col] *= 0.125
+                    if high_col is not None and low_col is not None and open_col is not None:
+                        mid = df.iloc[-k, close_col]
+                        df.iloc[-k, high_col] = mid * 1.001
+                        df.iloc[-k, low_col] = mid * 0.999
+            elif scenario == "ramp":
+                for k in range(1, 4):
+                    df.iloc[-k, close_col] *= 1.08
+                    df.iloc[-k, volume_col] *= 4
+            elif scenario == "stale":
+                flat = df.iloc[-4, close_col]
+                for k in range(1, 4):
+                    df.iloc[-k, close_col] = flat
+                    if high_col is not None and low_col is not None:
+                        df.iloc[-k, high_col] = flat
+                        df.iloc[-k, low_col] = flat
+        return df
+
     async def iter_analysis_events(
         self,
         query: str,
         demo_mode: Optional[bool] = None,
         academic_pace: bool = False,
         copy_mode: Optional[str] = "simple",
+        scenarios: Optional[list] = None,
     ):
         mode = normalize_copy_mode(copy_mode)
         started = time.time()
@@ -184,6 +253,8 @@ class AnalysisService:
         data_source_mode = self.settings.data_source_mode if demo_mode is None else ("offline_demo" if demo_mode else "live_cse_rest")
         node_status: Dict[str, Dict[str, Any]] = {}
         df = data_provider.historical_ohlcv(symbol)
+        if scenarios and len(df):
+            df = self._apply_scenarios(df, [s for s in scenarios if s in self.SCENARIOS])
         node_status["historical_data"] = {"status": "ok"}
         try:
             order_book = data_provider.order_book(symbol)
@@ -357,6 +428,7 @@ class AnalysisService:
                 "intraday_context_source": intraday_context.get("source"),
                 "llm_provider": llm_provider,
                 "copy_mode": mode,
+                "scenarios": ("+".join(sorted(set(scenarios))) if scenarios else "off"),
                 "historical_rows": analysis["data_points"],
                 "tick_rows": microstructure.get("tick_count", 0),
                 "last_historical_timestamp": last_historical_timestamp or (str(df["timestamp"].iloc[-1]) if "timestamp" in df.columns else None),
@@ -558,17 +630,37 @@ class AnalysisService:
 
     @staticmethod
     def _build_narrator(app_settings: Settings) -> LLMNarrator:
+        from argus_final.llm import ChainNarrator, GeminiNarrator, OllamaNarrator
+
+        chain = []
+        if app_settings.ollama_enabled:
+            chain.append(
+                OllamaNarrator(
+                    base_url=app_settings.ollama_base_url,
+                    model=app_settings.ollama_model,
+                    timeout=app_settings.ollama_timeout,
+                )
+            )
+        gemini_key = app_settings.gemini_api_key
+        if gemini_key:
+            chain.append(GeminiNarrator(api_key=gemini_key, model=app_settings.gemini_model))
+
         deepseek_key = app_settings.deepseek_api_key
         if deepseek_key and deepseek_key != "REPLACE_WITH_DEEPSEEK_API_KEY":
-            return DeepSeekNarrator(api_key=deepseek_key, model=app_settings.deepseek_model)
+            chain.append(DeepSeekNarrator(api_key=deepseek_key, model=app_settings.deepseek_model))
 
         key = app_settings.openrouter_api_key
         if key and key != "REPLACE_WITH_OPENROUTER_API_KEY":
             model = app_settings.openrouter_model
             if model in ("openrouter/auto", ""):
                 model = "openrouter/free"
-            return OpenRouterNarrator(api_key=key, model=model)
-        return TemplateNarrator()
+            chain.append(OpenRouterNarrator(api_key=key, model=model))
+
+        if not chain:
+            return TemplateNarrator()
+        if len(chain) == 1:
+            return chain[0]
+        return ChainNarrator(chain)
 
     def _provider_for_mode(self, demo_mode: bool) -> MarketDataProvider:
         if demo_mode:

@@ -34,10 +34,12 @@ export function useAnalyzeStream() {
     query,
     demoMode,
     copyMode = 'simple',
+    scenarios = [] as string[],
   }: {
     query: string
     demoMode: boolean
     copyMode?: 'simple' | 'experience'
+    scenarios?: string[]
   }) => {
     sourceRef.current?.close()
     startedRef.current = performance.now()
@@ -50,6 +52,7 @@ export function useAnalyzeStream() {
       query,
       demoMode,
       copyMode,
+      scenarios,
       onStage: (stage) => setPipeline((current) => upsertStage(current, stage)),
       onFinal: (payload) => {
         setData(payload)

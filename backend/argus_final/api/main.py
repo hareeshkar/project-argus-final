@@ -17,7 +17,14 @@ from argus_final.data.tick_store import InMemoryTickStore, LiveTickStore, RedisT
 from argus_final.data.websocket_provider import WebSocketMarketDataProvider
 from argus_final.data.providers import MarketDataProvider
 from argus_final.data.cse_provider import CseRestMarketDataProvider
-from argus_final.llm import DeepSeekNarrator, OpenRouterNarrator, TemplateNarrator
+from argus_final.llm import (
+    ChainNarrator,
+    DeepSeekNarrator,
+    GeminiNarrator,
+    OllamaNarrator,
+    OpenRouterNarrator,
+    TemplateNarrator,
+)
 from argus_final.services import AnalysisService
 from argus_final.services.chat_service import ChatService
 from argus_final.worker.ws_ingest import run_ws_ingest_loop
@@ -27,6 +34,7 @@ class AnalysisRequest(BaseModel):
     query: str
     demo_mode: Optional[bool] = None
     copy_mode: Optional[str] = "simple"
+    scenarios: Optional[list[str]] = None
 
 
 class ChatMessage(BaseModel):
@@ -104,9 +112,9 @@ def create_app(
     )
 
     def narrator_provider_name(narrator) -> str:
-        if isinstance(narrator, DeepSeekNarrator):
+        if isinstance(narrator, (OllamaNarrator, GeminiNarrator, ChainNarrator)):
             return narrator.model
-        if isinstance(narrator, OpenRouterNarrator):
+        if isinstance(narrator, (DeepSeekNarrator, OpenRouterNarrator)):
             return narrator.model
         return "deterministic_template"
 
@@ -152,6 +160,7 @@ def create_app(
             request.query,
             demo_mode=request.demo_mode,
             copy_mode=request.copy_mode,
+            scenarios=request.scenarios or [],
         )
 
     @app.get("/api/analyze/stream")
@@ -161,6 +170,7 @@ def create_app(
         demo_mode: Optional[bool] = None,
         copy_mode: Optional[str] = "simple",
         pace: str = "academic",
+        scenarios: Optional[str] = None,
     ):
         """Stream the analysis pipeline as Server-Sent Events, then emit the final payload."""
 
@@ -175,6 +185,7 @@ def create_app(
                     demo_mode=demo_mode,
                     academic_pace=academic_pace,
                     copy_mode=copy_mode,
+                    scenarios=[x for x in (scenarios or "").split(",") if x],
                 ):
                     if await request.is_disconnected():
                         break

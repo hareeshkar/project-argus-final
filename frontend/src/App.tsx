@@ -59,6 +59,7 @@ function AppShell() {
   const { mode: copyMode } = useCopyMode()
   const [query, setQuery]             = useState('Analyze COMB')
   const [demoMode, setDemoMode]       = useState(false)
+  const [scenarios, setScenarios]     = useState<string[]>([])
   const [drawerOpen, setDrawerOpen]   = useState(false)
   const [methodOpen, setMethodOpen]   = useState(false)
   const [chatOpen, setChatOpen]       = useState(false)
@@ -94,7 +95,7 @@ function AppShell() {
     const q = sym ? `Analyze ${sym.split('.')[0]}` : query
     if (sym) setQuery(q)
     setPipelineQuery(q)
-    analyze.run({ query: q, demoMode, copyMode })
+    analyze.run({ query: q, demoMode, copyMode, scenarios })
   }
 
   const showPipeline = busy || analyze.pipeline.length > 0
@@ -149,6 +150,8 @@ function AppShell() {
             setQuery={setQuery}
             demoMode={demoMode}
             setDemoMode={setDemoMode}
+            scenarios={scenarios}
+            setScenarios={setScenarios}
             busy={busy}
             onSubmit={() => runAnalysis()}
           />

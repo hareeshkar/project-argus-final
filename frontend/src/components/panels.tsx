@@ -131,11 +131,22 @@ export function TopBar({
 
 // ─── Query console ────────────────────────────────────────────────────────────
 
+const SCENARIO_TOGGLES = [
+  { id: 'pump', label: 'PUMP' },
+  { id: 'crash', label: 'CRASH' },
+  { id: 'volstorm', label: 'V-STORM' },
+  { id: 'liquidity', label: 'LIQ-DRAIN' },
+  { id: 'ramp', label: 'RAMP +8%' },
+  { id: 'stale', label: 'STALE' },
+]
+
 export function QueryConsole({
   query,
   setQuery,
   demoMode,
   setDemoMode,
+  scenarios,
+  setScenarios,
   busy,
   onSubmit,
 }: {
@@ -143,6 +154,8 @@ export function QueryConsole({
   setQuery: (q: string) => void
   demoMode: boolean
   setDemoMode: (v: boolean) => void
+  scenarios: string[]
+  setScenarios: (v: string[]) => void
   busy: boolean
   onSubmit: () => void
 }) {
@@ -175,6 +188,20 @@ export function QueryConsole({
           />
           demo
         </label>
+        {SCENARIO_TOGGLES.map((sc) => (
+          <label key={sc.id} className="demo-toggle">
+            <input
+              type="checkbox"
+              checked={scenarios.includes(sc.id)}
+              onChange={(e) =>
+                setScenarios(
+                  e.target.checked ? [...scenarios, sc.id] : scenarios.filter((x) => x !== sc.id)
+                )
+              }
+            />
+            {sc.label}
+          </label>
+        ))}
       </div>
     </div>
   )
@@ -1337,6 +1364,12 @@ export function LineagePanel({ data }: { data: ArgusAnalysis }) {
         <dd>{l.intraday_context_source ?? '—'}</dd>
         <dt>copy_mode</dt>
         <dd>{l.copy_mode ?? data.copy_mode ?? '—'}</dd>
+        {l.scenarios && l.scenarios !== 'off' && (
+          <>
+            <dt>scenarios</dt>
+            <dd className="warn-text">simulated: {l.scenarios}</dd>
+          </>
+        )}
         <dt>llm_provider</dt>
         <dd>{l.llm_provider ?? '—'}</dd>
         <dt>historical_rows</dt>

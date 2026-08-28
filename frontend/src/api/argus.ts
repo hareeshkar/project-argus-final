@@ -11,10 +11,11 @@ export async function analyze(
   query: string,
   demoMode: boolean,
   copyMode: 'simple' | 'experience' = 'simple',
+  scenarios: string[] = [],
 ): Promise<ArgusAnalysis> {
   const payload = await apiFetch<unknown>('/api/analyze', {
     method: 'POST',
-    body: JSON.stringify({ query, demo_mode: demoMode, copy_mode: copyMode }),
+    body: JSON.stringify({ query, demo_mode: demoMode, copy_mode: copyMode, scenarios }),
   })
 
   const parsed = argusAnalysisSchema.safeParse(payload)
@@ -35,6 +36,7 @@ export function streamAnalysis({
   query,
   demoMode,
   copyMode = 'simple',
+  scenarios = [],
   pace = 'fast',
   onStage,
   onFinal,
@@ -43,6 +45,7 @@ export function streamAnalysis({
   query: string
   demoMode: boolean
   copyMode?: 'simple' | 'experience'
+  scenarios?: string[]
   pace?: 'fast' | 'academic'
   onStage: (stage: PipelineStage) => void
   onFinal: (payload: ArgusAnalysis) => void
@@ -52,6 +55,7 @@ export function streamAnalysis({
     query,
     demo_mode: String(demoMode),
     copy_mode: copyMode,
+    scenarios: scenarios.join(','),
     pace,
   })
   const source = new EventSource(`${apiBaseUrl()}/api/analyze/stream?${params.toString()}`)

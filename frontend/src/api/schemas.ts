@@ -83,6 +83,7 @@ export const argusAnalysisSchema = z.object({
     intraday_context_source: z.string().nullable().optional(),
     llm_provider: z.string().optional(),
     copy_mode: z.string().optional(),
+    scenarios: z.string().optional(),
     historical_rows: nullableNumber,
     tick_rows: nullableNumber,
     last_historical_timestamp: z.union([z.string(), z.number()]).nullable().optional(),
