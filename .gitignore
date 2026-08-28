@@ -48,3 +48,18 @@ temp/
 
 # Docker / Redis local data (if mounted)
 redis-data/
+
+# report writing workspace (dissertation drafts, figures, captured screenshots, state files)
+report-writing/
+assignment_context.json
+PROJECT_STATE.md
+dissertation*.docx
+assignment*.docx
+*.drawio
+scenario_*.png
+ch6_*.png
+ch5_*.png
+gform_*.png
+gantt_*.png
+guardrails_*.png
+tc_*.png
