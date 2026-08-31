@@ -63,3 +63,8 @@ gform_*.png
 gantt_*.png
 guardrails_*.png
 tc_*.png
+
+# Submission documents live outside the repo (final PDF archived separately)
+*.docx
+*.pdf
+~$*

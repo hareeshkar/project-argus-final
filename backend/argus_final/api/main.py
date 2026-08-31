@@ -122,6 +122,14 @@ def create_app(
     async def health():
         tick_store = getattr(app.state, "tick_store", InMemoryTickStore())
         store_kind = "redis" if isinstance(tick_store, RedisTickStore) else "memory"
+        # Expose Ollama config (without leaking full secrets) so Tailscale IP
+        # configurability can be verified from the browser or /health.
+        ollama_info = {
+            "enabled": app_settings.ollama_enabled,
+            "base_url": app_settings.ollama_base_url,
+            "model": app_settings.ollama_model,
+            "timeout": app_settings.ollama_timeout,
+        }
         return {
             "status": "ok",
             "version": __version__,
@@ -136,8 +144,39 @@ def create_app(
                 "ws_ingest": "enabled" if app_settings.ws_ingest_enabled else "disabled",
                 "arima_mode": app_settings.arima_mode,
                 "chat": "ok",
+                "ollama": ollama_info,
             },
         }
+
+    @app.get("/api/ollama/status")
+    async def ollama_status():
+        """Lightweight Ollama connectivity check for the Tailscale IP."""
+        import httpx
+
+        url = f"{app_settings.ollama_base_url.rstrip('/')}/api/tags"
+        try:
+            async with httpx.AsyncClient(timeout=app_settings.ollama_timeout) as client:
+                resp = await client.get(url)
+                resp.raise_for_status()
+                data = resp.json()
+                models = [m.get("name") for m in data.get("models", [])]
+                return {
+                    "reachable": True,
+                    "base_url": app_settings.ollama_base_url,
+                    "model_configured": app_settings.ollama_model,
+                    "models_available": models,
+                    "enabled": app_settings.ollama_enabled,
+                    "timeout": app_settings.ollama_timeout,
+                }
+        except Exception as exc:
+            return {
+                "reachable": False,
+                "base_url": app_settings.ollama_base_url,
+                "model_configured": app_settings.ollama_model,
+                "enabled": app_settings.ollama_enabled,
+                "timeout": app_settings.ollama_timeout,
+                "error": str(exc),
+            }
 
     @app.post("/api/chat")
     async def chat(request: ChatRequest):

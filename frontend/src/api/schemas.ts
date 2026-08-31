@@ -9,7 +9,7 @@ export const healthSchema = z.object({
   status: z.string(),
   version: z.string().optional(),
   service: z.string().optional(),
-  components: z.record(z.string(), z.string()),
+  components: z.record(z.string(), z.any()),
 })
 
 const nodeStatusSchema = z.object({

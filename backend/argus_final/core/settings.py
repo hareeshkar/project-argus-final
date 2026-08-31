@@ -31,6 +31,55 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return raw.lower() in {"1", "true", "yes", "on"}
 
 
+def _env_str(*names: str, default: str = "") -> str:
+    """Return first non-empty env var among *names*, else default.
+
+    Allows both generic (OLLAMA_*) and namespaced (ARGUS_OLLAMA_*) keys so a
+    Tailscale IP like 100.103.209.102 can be swapped without code changes.
+    Also supports Ollama's native OLLAMA_HOST variable.
+    """
+    for name in names:
+        raw = os.getenv(name)
+        if raw and raw.strip():
+            return raw.strip().strip('"').strip("'")
+    return default
+
+
+def _env_float(*names: str, default: float = 6.0) -> float:
+    for name in names:
+        raw = os.getenv(name)
+        if raw and raw.strip():
+            try:
+                return float(raw.strip().strip('"').strip("'"))
+            except ValueError:
+                continue
+    return default
+
+
+def _resolve_ollama_base_url() -> str:
+    """Resolve Ollama base URL from env with priority for Tailscale configurability.
+
+    Priority (first hit wins):
+      1. ARGUS_OLLAMA_BASE_URL  (project-namespaced, explicit)
+      2. OLLAMA_BASE_URL        (Ollama standard / existing code)
+      3. ARGUS_OLLAMA_HOST      (alt namespaced)
+      4. OLLAMA_HOST            (Ollama native env var)
+      5. default localhost:11434
+    Normalizes by stripping trailing slashes.
+    """
+    raw = _env_str(
+        "ARGUS_OLLAMA_BASE_URL",
+        "OLLAMA_BASE_URL",
+        "ARGUS_OLLAMA_HOST",
+        "OLLAMA_HOST",
+        default="http://localhost:11434",
+    )
+    # If OLLAMA_HOST was given as "host:port" without scheme, add http://
+    if raw and "://" not in raw:
+        raw = f"http://{raw}"
+    return raw.rstrip("/")
+
+
 @dataclass(frozen=True)
 class Settings:
     app_name: str = "Project Argus Final API"
@@ -44,9 +93,9 @@ class Settings:
     gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
     gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
     ollama_enabled: bool = _env_bool("ARGUS_OLLAMA_ENABLED", True)
-    ollama_base_url: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-    ollama_model: str = os.getenv("OLLAMA_MODEL", "gemma4")
-    ollama_timeout: float = float(os.getenv("ARGUS_OLLAMA_TIMEOUT", "6"))
+    ollama_base_url: str = _resolve_ollama_base_url()
+    ollama_model: str = _env_str("ARGUS_OLLAMA_MODEL", "OLLAMA_MODEL", default="gemma4")
+    ollama_timeout: float = _env_float("ARGUS_OLLAMA_TIMEOUT", "OLLAMA_TIMEOUT", default=15.0)
     cors_origins: str = os.getenv(
         "ARGUS_CORS_ORIGINS",
         "http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000",

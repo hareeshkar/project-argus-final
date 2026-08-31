@@ -20,6 +20,16 @@ services:
       ARGUS_WS_INGEST_ENABLED: "false"
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-}
+      ARGUS_OLLAMA_BASE_URL: ${ARGUS_OLLAMA_BASE_URL:-}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-}
+      ARGUS_OLLAMA_MODEL: ${ARGUS_OLLAMA_MODEL:-}
+      OLLAMA_HOST: ${OLLAMA_HOST:-}
+      ARGUS_OLLAMA_ENABLED: ${ARGUS_OLLAMA_ENABLED:-}
+      ARGUS_OLLAMA_TIMEOUT: ${ARGUS_OLLAMA_TIMEOUT:-}
+      OLLAMA_TIMEOUT: ${OLLAMA_TIMEOUT:-}
     depends_on:
       - redis
     command: celery -A argus_final.worker.celery_app worker --loglevel=info --concurrency=2
@@ -32,9 +42,18 @@ services:
       REDIS_URL: redis://redis:6379/0
       ARGUS_REDIS_TICKS_ENABLED: "true"
       ARGUS_WS_INGEST_ENABLED: "true"
+      # Ollama is not needed for ws-ingest but expose for completeness
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-}
+      ARGUS_OLLAMA_BASE_URL: ${ARGUS_OLLAMA_BASE_URL:-}
     depends_on:
       - redis
     command: python -m argus_final.worker.ws_ingest
+
+  # Optional: add backend service when running full stack via compose
+  # It automatically picks up OLLAMA_BASE_URL / ARGUS_OLLAMA_BASE_URL /
+  # OLLAMA_HOST so a Tailscale IP like 100.103.209.102 can be injected
+  # without code changes:
+  #   OLLAMA_BASE_URL=http://100.103.209.102:11434 docker compose up backend
 
 volumes:
   redis-data:

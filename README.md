@@ -1,261 +1,163 @@
 # Project Argus Final
 
-Final prototype containing the FastAPI analytics backend and React/Vite frontend.
+A confidence-aware stock market analytics system for the Colombo Stock Exchange (CSE): a FastAPI analytics backend and a React/Vite analyst workstation that turn public exchange data into plain-language, trust-scored research evidence.
+
+> Research analytics only. The system does not produce investment advice.
 
 ## Structure
 
 ```text
 project-argus-final/
-  backend/   # FastAPI, analytics engine, CSE providers, tests
-  frontend/  # React + Vite + TypeScript analyst workstation
+  backend/    # FastAPI, analytics engine (ARIMA, EWMA, VaR), CSE providers, narrative + chat, tests
+  frontend/   # React + Vite + TypeScript analyst workstation
+  docker-compose.yml  # optional Redis / Celery / WebSocket-ingest stack
 ```
 
-## Run Backend
+## Quick Start (examiner / agent path)
+
+```bash
+# 1. Backend
+cd backend
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+PYTHONPATH=. .venv/bin/uvicorn argus_final.api.main:app --host 127.0.0.1 --port 8000
+
+# 2. Frontend (second terminal)
+cd frontend
+npm install
+npm run dev          # http://localhost:5173
+```
+
+Open `http://localhost:5173`, type **Analyze COMB.N0000**, press Run. The dashboard streams a five-stage pipeline (parse, fetch, models, confidence, narrative) and renders the full evidence panels.
+
+**No environment setup is required**: `backend/.env.local` ships preconfigured (demo mode on, local Ollama narration). The backend starts in demo mode and works fully offline; live CSE REST data is used automatically when `demo_mode` is off and the exchange is reachable.
+
+## Backend Setup
+
+Requirements: Python 3.11+.
 
 ```bash
 cd backend
-PYTHONPATH=. ../../project-argus/venv/bin/uvicorn argus_final.api.main:app --reload
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env.local   # already provided preconfigured in this submission
 ```
 
-## Run Frontend
+Run the API:
+
+```bash
+PYTHONPATH=. .venv/bin/uvicorn argus_final.api.main:app --host 127.0.0.1 --port 8000 --reload
+```
+
+Verify:
+
+```bash
+curl http://127.0.0.1:8000/health
+# {"status": "ok", "version": "2.0.0", "components": {"api": "ok", ...}}
+```
+
+Key configuration (all optional - defaults work out of the box):
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `ARGUS_DEMO_MODE` | `true` | Deterministic in-memory data; `false` = live CSE REST |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Local Ollama for narration (Gemma 4) |
+| `OLLAMA_MODEL` | `gemma4` | Narration model |
+| `ARGUS_CORS_ORIGINS` | localhost origins | Allowed browser origins |
+
+Narration runs local-first through Ollama; if the local model is unreachable, deterministic template narrators keep every explanation layer functional. Provider overrides are env-configurable (see `backend/.env.example`).
+
+## Frontend Setup
+
+Requirements: Node 18+.
 
 ```bash
 cd frontend
 npm install
-npm run dev
+npm run dev        # dev server on http://localhost:5173
+npm run build      # production build
 ```
 
-The frontend reads `VITE_ARGUS_API_BASE_URL`; default is `http://localhost:8000`.
+The frontend reads `VITE_ARGUS_API_BASE_URL` (default `http://localhost:8000`); override via `frontend/.env`.
 
-## Architecture Upgrades (optional)
+## Optional Infrastructure (docker-compose)
 
-Redis tick store, Celery LLM offload, and persistent WebSocket ingest are available via `docker-compose.yml`. Defaults keep local dev simple (in-memory ticks, inline template narrative).
-
-```bash
-docker compose up -d redis              # shared tick store + Celery broker
-docker compose up -d celery-worker      # LLM narrative offload
-docker compose up -d ws-ingest          # persistent CSE WebSocket → Redis
-
-# Enable when stack is running (backend env):
-# ARGUS_REDIS_TICKS_ENABLED=true ARGUS_LLM_QUEUE_ENABLED=true ARGUS_WS_INGEST_ENABLED=true
-```
-
-Install new Python deps from `backend/`:
+Redis tick store, Celery LLM offload, and persistent WebSocket ingest are available but **off by default** (local dev stays simple):
 
 ```bash
-../../project-argus/venv/bin/pip install -r requirements.txt
-```
-# Project Argus Final Backend
-
-Project Argus Final is the cleaned backend target for a confidence-aware Colombo Stock Exchange analytics system.
-
-This folder intentionally contains only the enterprise backend surface needed for the final system:
-
-- `argus_final/analytics`: bounded ARIMA diagnostics, EWMA, Historical VaR, Parkinson volatility, MAD anomalies, drawdown, regime labels, confidence vector, indicator vote.
-- `argus_final/data`: provider boundary, deterministic offline provider, and native CSE REST provider.
-- `argus_final/services`: analysis orchestration without LangGraph dependency.
-- `argus_final/llm`: deterministic narrative fallback. LLMs are optional presentation layers.
-- `argus_final/api`: FastAPI app with `/health` and `/api/analyze`.
-- `tests`: verbose executable tests for offline demo, live CSE REST, WebSocket diagnostics, and API behavior.
-
-## Run
-
-```bash
-cd /Users/hareeshkar/Documents/cse/project-argus-final
-PYTHONPATH=. ../project-argus/venv/bin/uvicorn argus_final.api.main:app --reload
+docker compose up -d redis            # shared tick store + Celery broker
+docker compose up -d celery-worker    # narrative offload
+docker compose up -d ws-ingest        # persistent CSE WebSocket -> Redis
+# then set in backend env: ARGUS_REDIS_TICKS_ENABLED=true ARGUS_LLM_QUEUE_ENABLED=true ARGUS_WS_INGEST_ENABLED=true
 ```
 
 ## Demo Mode vs Live CSE REST
 
-The API supports a frontend toggle through the `demo_mode` request field.
-
-Demo mode uses deterministic in-memory data:
+The frontend toggle (or the `demo_mode` request field) selects the data path:
 
 ```json
-{
-  "query": "Analyze COMB",
-  "demo_mode": true
-}
+{ "query": "Analyze COMB", "demo_mode": true }
 ```
 
-Live CSE REST mode uses the native final CSE provider:
+- **Demo (`true`)**: deterministic in-memory dataset - no internet, no market hours, fully reproducible.
+- **Live (`false`)**: real CSE REST data (~240 daily candles, order-book totals, trade summary). Response lineage reports its sources, e.g. `historical_source: CSE_REST`, `live_source: CSE_REST_TRADE_SUMMARY` (or `CSE_WEBSOCKET_DAYTRADE` when the tick store has live ticks).
 
-```json
-{
-  "query": "Analyze COMB",
-  "demo_mode": false
-}
-```
+The intraday/live layer never enters ARIMA or VaR maths; it only adds a bounded, capped nudge to the ensemble and feeds quality flags.
 
-When `demo_mode` is `false`, the response lineage should show:
+## Tests
 
-```json
-{
-  "historical_source": "CSE_REST",
-  "order_book_source": "CSE_REST_ORDERBOOK",
-  "live_source": "CSE_REST_TRADE_SUMMARY",
-  "intraday_context_source": "CSE_REST_TRADE_SUMMARY"
-}
-```
-
-`live_source` is `CSE_REST_TRADE_SUMMARY` for REST-only analysis (the microstructure proxy comes from `tradeSummary`). When the shared WebSocket tick store has live ticks for the symbol, `live_source` becomes `CSE_WEBSOCKET_DAYTRADE` and the intraday context layer prefers real ticks. `CseRestMarketDataProvider` is intentionally REST-only; `WebSocketMarketDataProvider` owns `/topic/daytrade` ticks. Order book + microstructure feed a separate intraday context layer (small ensemble nudge + quality flags), never ARIMA/VaR.
-
-## Live Volume Enrichment
-
-Runtime browser and WebSocket inspection showed that CSE `/topic/daytrade` frequently emits price/change ticks without true quantity:
-
-```json
-{
-  "symbol": "JKH.N0000",
-  "price": 20.4,
-  "change": 0.4,
-  "changePercentage": 2.0
-}
-```
-
-The official site combines that WebSocket feed with REST endpoints that do include quantity-rich fields:
-
-- `/api/tradeSummary`: `quantity`, `sharevolume`, `tradevolume`, `turnover`, `lastTradedTime`
-- `/api/mostActiveTrades`: `tradeVolume`, `shareVolume`, `turnover`
-- `/api/mostActiveVolumes`: `tradeVolume`, `shareVolume`, `turnover`
-- `/api/marketSummery`: market-level `tradeVolume`, `shareVolume`, `trades`
-- `/api/allSectors`: sector-level `sectorVolumeToday`, `sectorTurnoverToday`, `percentage`
-- `/api/approvedAnnouncement`, `/api/news/web`: context for analyst/chat explanations
-
-`CseRestMarketDataProvider` exposes:
-
-- `trade_summary(symbol)`
-- `most_active_trades()`
-- `most_active_volumes()`
-- `estimate_tick_volume(symbol)`
-- `market_status()`
-- `market_summary()`
-- `all_sectors()`
-- `approved_announcements()`
-- `news_top()`
-
-`WebSocketMarketDataProvider` accepts an optional `volume_estimator` callback. If a live WebSocket tick has no volume, it can enrich the tick from REST `tradeSummary`. If no enrichment is configured, the tick is still accepted with `volume=1` and `volume_estimated=true` so tick-count and price-momentum metrics remain usable but honest.
-
-`WebSocketMarketDataProvider` also processes these confirmed live topics:
-
-- `/topic/daytrade`, `/user/topic/daytrade`
-- `/topic/today-sharePrice`, `/user/topic/today-sharePrice`
-- `/topic/summary`, `/user/topic/summary`
-- `/topic/most-active-trades`, `/user/topic/most-active-trades`
-
-## Test Commands
-
-All commands assume the reusable virtual environment from the original `project-argus` folder:
+### Backend (Python unittest, 68 tests)
 
 ```bash
-cd /Users/hareeshkar/Documents/cse/project-argus-final
+cd backend
+PYTHONPATH=. .venv/bin/python -m unittest discover -s tests -v
 ```
 
-### 1. Offline Demo Test
+Covers: offline demo determinism, live CSE REST ingestion, WebSocket diagnostics, API surface (`/health`, `/api/analyze`), confidence penalties, quality flags, scenario guard rails, narrative/chat services, and fallback behaviour.
 
-Use this when you want a deterministic run that does not need internet, CSE availability, WebSocket market hours, or LLM keys.
+Compile check:
 
 ```bash
-PYTHONPATH=. ../project-argus/venv/bin/python -m unittest tests.test_01_offline_demo -v
+PYTHONPATH=. .venv/bin/python -m compileall -q argus_final tests
 ```
 
-This prints:
-
-- deterministic OHLCV analysis for `COMB.N0000`
-- ARIMA/AICc forecast diagnostics
-- volatility, Historical VaR, Parkinson volatility
-- MAD anomaly output
-- confidence vector
-- indicator vote
-- data lineage and quality flags
-
-### 2. Live CSE REST Test
-
-Use this to fetch real CSE REST historical OHLCV and order-book data, then run the final analytics engine on the real dataset.
+### Frontend (Vitest)
 
 ```bash
-PYTHONPATH=. ../project-argus/venv/bin/python -m unittest tests.test_02_live_cse_rest -v
+cd frontend
+npm test
 ```
 
-This prints:
+## AAA Agent (Automated Assessment) Guide
 
-- live CSE REST mode
-- real `COMB.N0000` historical row count
-- date range
-- latest OHLCV candle
-- live REST order-book pressure
-- final analytics output from real CSE data
+For an evaluating agent operating the repository non-interactively:
 
-### 3. Live CSE WebSocket Diagnostics Test
+1. **Environment**: Python 3.11+, Node 18+. No API keys or external services are required for the default path.
+2. **Backend up**:
+   ```bash
+   cd backend && python3 -m venv .venv && source .venv/bin/activate
+   pip install -r requirements.txt
+   PYTHONPATH=. .venv/bin/uvicorn argus_final.api.main:app --host 127.0.0.1 --port 8000 &
+   ```
+3. **Health gate**: `GET http://127.0.0.1:8000/health` must return `"status": "ok"` with `components.api == "ok"`.
+4. **Functional probe** (deterministic, offline):
+   ```bash
+   curl -s -X POST http://127.0.0.1:8000/api/analyze -H 'Content-Type: application/json' \
+        -d '{"query": "Analyze COMB.N0000", "demo_mode": true}'
+   ```
+   Expect a payload containing `confidence`, `ensemble`, `forecast`, `risk`, `data_lineage` (with `data_source_mode: offline_demo`) and `quality_flags`.
+5. **Backend suite**: `PYTHONPATH=. .venv/bin/python -m unittest discover -s tests -v` - expect all tests passing.
+6. **Frontend suite**: `cd frontend && npm ci || npm install`, then `npm test` - expect all tests passing; `npm run dev` serves the workstation on port 5173 (proxies to the API base URL above).
+7. **Evidence map**: manual test cases TC-01..TC-25 map to the automated suites as documented in Chapter 7 of the dissertation; the API contract mirrors the panels (confidence vector, ensemble vote, forecast diagnostics, risk block, lineage, quality flags).
 
-Default safe mode does not force a live market-hour socket capture. It prints market status and verifies the microstructure path with deterministic ticks.
+## API Surface
 
-```bash
-PYTHONPATH=. ../project-argus/venv/bin/python -m unittest tests.test_03_live_cse_websocket -v
-```
-
-To attempt a real `/topic/daytrade` WebSocket capture during market hours:
-
-```bash
-ARGUS_RUN_REAL_WEBSOCKET=1 ARGUS_WEBSOCKET_SECONDS=20 \
-PYTHONPATH=. \
-../project-argus/venv/bin/python -m unittest tests.test_03_live_cse_websocket -v
-```
-
-This prints:
-
-- current time and CSE market-open status
-- whether real WebSocket capture was attempted
-- live tick count if any ticks arrive
-- final LiveStore memory statistics
-- per-symbol VWAP, trade intensity, momentum, volume, and tick count
-
-### 4. API Test
-
-Use this to verify the final FastAPI surface with deterministic data.
-
-```bash
-PYTHONPATH=. ../project-argus/venv/bin/python -m unittest tests.test_api -v
-```
-
-This prints:
-
-- `/api/analyze` payload summary
-- top-level response keys
-- math-result sections
-- data lineage
-- `demo_mode` frontend toggle behavior
-- quality flags
-- `/health` component status
-
-### 5. Run All Tests
-
-Use this as the full agent handoff verification command.
-
-```bash
-PYTHONPATH=. ../project-argus/venv/bin/python -m unittest discover -s tests -v
-```
-
-### 6. Compile Check
-
-Use this before claiming the backend is structurally valid.
-
-```bash
-../project-argus/venv/bin/python -m compileall -q argus_final tests
-```
-
-## Environment Placeholders
-
-If OpenRouter is wired later, replace these placeholders with real secrets:
-
-```bash
-export OPENROUTER_API_KEY="REPLACE_WITH_OPENROUTER_API_KEY"
-export OPENROUTER_MODEL="openrouter/auto"
-export ARGUS_CORS_ORIGINS="http://localhost:5173,http://localhost:8000"
-```
-
-Do not commit real API keys.
+- `GET /health` - component status (api, data provider, analytics engine, narrative)
+- `POST /api/analyze` - streamed (SSE) five-stage analysis: parse -> fetch -> models -> confidence -> narrative
+- `GET /api/market-prices` - watchlist tape (10 CSE symbols)
+- `GET /api/live-price?symbol=...` - last trade snapshot (1 s poll open / 30 s closed)
+- `POST /api/chat` - RAG-grounded question answering over the loaded analysis (advice refusal enforced)
 
 ## Framing
 
-This is not a trading system and does not produce investment advice. It is a research analytics backend that exposes trend, volatility, anomaly, liquidity, and confidence diagnostics under the public CSE data constraints.
+This is a research analytics system, not a trading system. It exposes trend, volatility, anomaly, liquidity and confidence diagnostics under the public CSE data constraints (~240 daily rows per symbol), and it treats honest communication of uncertainty - documented penalties, quality flags, naive-baseline validation - as a first-class requirement.

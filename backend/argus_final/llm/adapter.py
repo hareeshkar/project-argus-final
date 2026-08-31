@@ -435,21 +435,30 @@ class OllamaNarrator:
             ],
             max_tokens=900,
             temperature=0.25,
+            json_mode=True,
         )
         return self._parse_explanation(content)
 
-    def complete_chat(self, messages, max_tokens: int = 800, temperature: float = 0.3) -> str:
-        data = self._post(
-            "/api/chat",
-            {
-                "model": self.model,
-                "messages": messages,
-                "stream": False,
-                "format": "json",
-                "options": {"temperature": temperature, "num_predict": max_tokens},
-            },
-        )
-        return ((data.get("message") or {}).get("content") or "").strip()
+    def complete_chat(self, messages, max_tokens: int = 800, temperature: float = 0.3, json_mode: bool = False) -> str:
+        payload: Dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "stream": False,
+            # Disable thinking for gemma4 to keep responses concise and within
+            # token budget (thinking can consume 200+ tokens before content).
+            "think": False,
+            "options": {"temperature": temperature, "num_predict": max_tokens},
+        }
+        if json_mode:
+            payload["format"] = "json"
+        data = self._post("/api/chat", payload)
+        # If thinking was enabled, content lives in message.content; thinking is separate.
+        # Fallback to thinking if content is empty (should not happen with think=False).
+        msg = data.get("message") or {}
+        content = (msg.get("content") or "").strip()
+        if not content and msg.get("thinking"):
+            content = msg.get("thinking", "").strip()
+        return content
 
     @staticmethod
     def _parse_explanation(content: str) -> Dict[str, Any]:
