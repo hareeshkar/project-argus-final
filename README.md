@@ -40,7 +40,7 @@ Requirements: Python 3.11+.
 cd backend
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env.local   # already provided preconfigured in this submission
+cp -n .env.example .env.local   # only if .env.local does not exist; this submission ships one preconfigured - do NOT overwrite it
 ```
 
 Run the API:
@@ -161,3 +161,14 @@ For an evaluating agent operating the repository non-interactively:
 ## Framing
 
 This is a research analytics system, not a trading system. It exposes trend, volatility, anomaly, liquidity and confidence diagnostics under the public CSE data constraints (~240 daily rows per symbol), and it treats honest communication of uncertainty - documented penalties, quality flags, naive-baseline validation - as a first-class requirement.
+
+## Troubleshooting & Diagnostics
+
+| Symptom | Check | Expected |
+|---|---|---|
+| Backend won't start | `curl http://127.0.0.1:8000/health` | `{"status": "ok", ...}` within a few seconds |
+| Port already in use | `lsof -i :8000` / `lsof -i :5173` | kill the stale process or use `--port 8001` (+ set `VITE_ARGUS_API_BASE_URL`) |
+| First narrative takes ~15-17 s | normal | local model handshake, then timeout with template/provider fallback - subsequent runs are faster |
+| Dashboard shows `CLOSED` badge | CSE trades 09:30-14:30 Sri Lanka time (Mon-Fri) | outside those hours prices freeze at the last session close; demo mode always works |
+| Live mode returns dashes | market closed or CSE temporarily empty | switch on the demo toggle for a deterministic offline run |
+| npm test fails to start | Node 18+ required | `node --version`, then `npm install` again |
